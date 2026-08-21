@@ -18,6 +18,7 @@ from typing import Any, Optional
 from sqlalchemy import (
     JSON,
     Boolean,
+    Case,
     DateTime,
     Float,
     ForeignKey,
@@ -26,6 +27,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
+    case,
+    or_,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -97,17 +101,8 @@ class User(Base):
 # Spotkania
 # --------------------------------------------------------------------------
 
-# Kanoniczne grupy statusów do filtrowania w UI. Recall ma kilkanaście kodów;
-# użytkownika interesuje głównie: czeka / trwa / gotowe / nie wyszło.
-STATUS_GROUPS: dict[str, str] = {
-    "scheduled": "Scheduled",
-    "joining": "Joining",
-    "recording": "Recording",
-    "done": "Finished",
-    "failed": "Failed",
-    "expired": "Media expired",
-}
-
+# Wewnętrzne grupy statusów bota z Recall (kilkanacie kodów → 6 grup).
+# Nie są już osią UI — status dla człowieka wyprowadza `Meeting.user_status`.
 _RAW_TO_GROUP = {
     "ready": "scheduled",
     "scheduled": "scheduled",
@@ -136,6 +131,19 @@ def status_group(raw_code: Optional[str]) -> str:
 # Stan lokalnych assetów i transkryptu — sterują tym, co można kliknąć w UI.
 ASSET_STATES = ("none", "queued", "fetching", "ready", "expired", "failed")
 TRANSCRIPT_STATES = ("none", "queued", "running", "ready", "failed")
+
+# Status widziany przez użytkownika — wyprowadzany, nie zapisywany.
+# Jedna oś zamiast pary (status_group, transcript_state); kolejność to cykl
+# życia (sidebar, sortowanie), etykiety mieszczą się w webapp/labels.py.
+USER_STATUS_ORDER: tuple[str, ...] = (
+    "upcoming", "in_meeting", "processing", "to_process",
+    "ready", "failed", "no_recording",
+)
+
+# Widok domyślny „Finished": wszystko, co się zakończyło — z transkryptem,
+# do przetworzenia, nieudane i bez nagrania. Żywe stany (upcoming /
+# in_meeting / processing) trzyma maszyna.
+DEFAULT_VIEW_STATUSES: tuple[str, ...] = ("to_process", "ready", "failed", "no_recording")
 
 
 class Meeting(Base):
@@ -200,6 +208,45 @@ class Meeting(Base):
         return self.started_at or self.join_at
 
     @property
+    def user_status(self) -> str:
+        """Status dla człowieka — patrz USER_STATUS_ORDER i issue #1.
+
+        Kolejność ma znaczenie: gotowy transkrypt wygrywa nawet z padniętym
+        botem, a wygasły media TTL z assetami na dysku to wciąż To process
+        (dysk jest źródłem prawdy, nie Recall).
+        """
+        if self.transcript_state == "ready":
+            return "ready"
+        if self.status_group == "scheduled":
+            return "upcoming"
+        if self.status_group in ("joining", "recording"):
+            return "in_meeting"
+        if (
+            self.status_group == "failed"
+            or self.transcript_state == "failed"
+            or self.asset_state == "failed"
+        ):
+            return "failed"
+        if (
+            self.asset_state in ("queued", "fetching")
+            or self.transcript_state in ("queued", "running")
+        ):
+            return "processing"
+        if (
+            self.status_group in ("done", "expired")
+            and self.transcript_state == "none"
+            and (
+                self.asset_state == "ready"
+                or (
+                    self.recording_id is not None
+                    and (self.media_expires_at is None or self.media_expires_at > utcnow())
+                )
+            )
+        ):
+            return "to_process"
+        return "no_recording"
+
+    @property
     def human_participants(self) -> list["MeetingParticipant"]:
         """Ludzie bez duplikatów — ta sama osoba bywa i w Recall, i w kalendarzu.
 
@@ -217,6 +264,50 @@ class Meeting(Base):
 
 
 Index("ix_meetings_started_status", Meeting.started_at, Meeting.status_group)
+
+
+def user_status_case(now: dt.datetime) -> Case:
+    """SQL-owy odpowiednik `Meeting.user_status` — WHERE / GROUP BY / ORDER BY.
+
+    `now` jest parametrem, a nie `utcnow()` w środku, żeby jedno zapytanie
+    (np. filtry + fasetty w jednym requeście) widziało jeden punkt w czasie.
+    """
+    media_live = or_(
+        Meeting.media_expires_at.is_(None),
+        Meeting.media_expires_at > now,
+    )
+    return case(
+        (Meeting.transcript_state == "ready", "ready"),
+        (Meeting.status_group == "scheduled", "upcoming"),
+        (Meeting.status_group.in_(("joining", "recording")), "in_meeting"),
+        (
+            or_(
+                Meeting.status_group == "failed",
+                Meeting.transcript_state == "failed",
+                Meeting.asset_state == "failed",
+            ),
+            "failed",
+        ),
+        (
+            or_(
+                Meeting.asset_state.in_(("queued", "fetching")),
+                Meeting.transcript_state.in_(("queued", "running")),
+            ),
+            "processing",
+        ),
+        (
+            and_(
+                Meeting.status_group.in_(("done", "expired")),
+                Meeting.transcript_state == "none",
+                or_(
+                    Meeting.asset_state == "ready",
+                    and_(Meeting.recording_id.is_not(None), media_live),
+                ),
+            ),
+            "to_process",
+        ),
+        else_="no_recording",
+    )
 
 
 # Nazwy botów-notetakerów, które nie są ludźmi — nie chcemy ich w filtrach.

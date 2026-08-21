@@ -616,10 +616,10 @@ tbody tr.accent { background: var(--lime-soft); }
 }
 .b-done, .b-ready { background: var(--green-soft); color: var(--green); border-color: var(--green-line); }
 .b-recording { background: var(--red-soft); color: var(--red); border-color: var(--red-line); }
-.b-joining, .b-running { background: var(--blue-soft); color: var(--blue); border-color: var(--blue-line); }
-.b-scheduled, .b-queued, .b-none, .b-canceled { background: var(--bg-3); color: var(--ink-3); }
+.b-joining, .b-running, .b-in_meeting, .b-processing { background: var(--blue-soft); color: var(--blue); border-color: var(--blue-line); }
+.b-scheduled, .b-queued, .b-none, .b-canceled, .b-upcoming, .b-no_recording { background: var(--bg-3); color: var(--ink-3); }
 .b-failed { background: var(--red-soft); color: var(--red); border-color: var(--red-line); }
-.b-expired, .b-fetching { background: var(--amber-soft); color: var(--amber); border-color: var(--amber-line); }
+.b-expired, .b-fetching, .b-to_process { background: var(--amber-soft); color: var(--amber); border-color: var(--amber-line); }
 
 .pill {
   background: var(--lime);

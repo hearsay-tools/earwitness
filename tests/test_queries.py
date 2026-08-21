@@ -11,7 +11,7 @@ from webapp.queries import MeetingFilters, participant_facets, search_meetings, 
 from webapp.recall_sync import rebuild_search_blob
 
 
-def _mk(session, mid, title, when, group="done", people=(), transcript="none"):
+def _mk(session, mid, title, when, group="done", people=(), transcript="none", recording_id="rec-1"):
     m = Meeting(
         id=mid,
         title=title,
@@ -21,6 +21,7 @@ def _mk(session, mid, title, when, group="done", people=(), transcript="none"):
         status_code=group,
         status_group=group,
         transcript_state=transcript,
+        recording_id=recording_id,
         duration_seconds=600,
     )
     session.add(m)
@@ -41,10 +42,11 @@ def seeded(session):
     _mk(session, "a" * 8, "Weekly Sync", base,
         people=[("Anna Nowak", "recall", False), ("Notetaker Bot", "recall", True)],
         transcript="ready")
-    _mk(session, "b" * 8, "Project Kickoff", base + dt.timedelta(days=3),
+    _mk(session, "b" * 8, "Project Kickoff", base + dt.timedelta(days=3), recording_id=None,
         people=[("Jan Kowalski", "recall", False), ("Anna Nowak", "calendar", False)])
     _mk(session, "c" * 8, "Retro zespołu", base - dt.timedelta(days=10), group="failed",
         people=[("Jan Kowalski", "recall", False)])
+    _mk(session, "d" * 8, "Daily Standup", base + dt.timedelta(days=1))
     return session
 
 
@@ -66,14 +68,14 @@ def test_search_requires_every_token(seeded):
 def test_filter_by_status_group(seeded):
     _, total = search_meetings(seeded, MeetingFilters(statuses=["failed"]))
     assert total == 1
-    _, total = search_meetings(seeded, MeetingFilters(statuses=["done", "failed"]))
-    assert total == 3
+    _, total = search_meetings(seeded, MeetingFilters(statuses=["in_meeting", "upcoming"]))
+    assert total == 0
 
 
 def test_filter_by_date_range(seeded):
     f = MeetingFilters(date_from=dt.date(2026, 8, 1), date_to=dt.date(2026, 8, 2))
     _, total = search_meetings(seeded, f)
-    assert total == 1
+    assert total == 2  # Aug 1 (Weekly Sync) + Aug 2 (Daily Standup)
 
 
 def test_filter_by_participant_is_conjunctive(seeded):
@@ -86,11 +88,22 @@ def test_filter_by_participant_is_conjunctive(seeded):
     assert total == 1
 
 
-def test_filter_by_transcript_state(seeded):
-    _, total = search_meetings(seeded, MeetingFilters(transcript="ready"))
+def test_filter_by_user_status(seeded):
+    _, total = search_meetings(seeded, MeetingFilters(statuses=["failed"]))
     assert total == 1
-    _, total = search_meetings(seeded, MeetingFilters(transcript="none"))
-    assert total == 2
+    _, total = search_meetings(seeded, MeetingFilters(statuses=["no_recording"]))
+    assert total == 1  # „Project Kickoff”: done bez nagrania
+    _, total = search_meetings(seeded, MeetingFilters(statuses=["to_process"]))
+    assert total == 1  # „Daily Standup”: done z nagraniem, bez transkryptu
+    _, total = search_meetings(seeded, MeetingFilters(statuses=["ready", "failed", "no_recording"]))
+    assert total == 3
+
+
+def test_status_sort_ranks_lifecycle_first(seeded):
+    rows, _ = search_meetings(seeded, MeetingFilters(sort="status_asc"))
+    # ranga: to_process(3) < ready(4) < failed(5) < no_recording(6)
+    assert [r.id for r in rows] == ["d" * 8, "a" * 8, "c" * 8, "b" * 8]
+    assert [r.user_status for r in rows] == ["to_process", "ready", "failed", "no_recording"]
 
 
 def test_sort_orders(seeded):
@@ -125,12 +138,12 @@ def test_next_sort_toggles_and_resets_to_primary():
 
 def test_pagination(seeded):
     rows, total = search_meetings(seeded, MeetingFilters(per_page=2, page=2))
-    assert total == 3 and len(rows) == 1
+    assert total == 4 and len(rows) == 2
 
 
 def test_status_facets_ignore_status_filter(seeded):
     facets = status_facets(seeded, MeetingFilters(statuses=["failed"]))
-    assert facets == {"done": 2, "failed": 1}
+    assert facets == {"ready": 1, "failed": 1, "no_recording": 1, "to_process": 1}
 
 
 def test_participant_facets_exclude_bots(seeded):

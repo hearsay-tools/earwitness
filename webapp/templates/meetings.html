@@ -7,7 +7,17 @@
   <div>
     <h1>Meetings<span class="u">_</span></h1>
     <p class="sub" style="margin:0">
-      {{ total }} {{ 'meeting' if total == 1 else 'meetings' }}{% if f.is_active() %} after filtering{% endif %}.
+      {% if f.is_active() %}
+        {{ total }} {{ 'meeting' if total == 1 else 'meetings' }} after filtering.
+      {% elif f.default_view %}
+        {{ total }} finished {{ 'meeting' if total == 1 else 'meetings' }}.
+        <a href="{{ qs(qbase, view='all', page=None) }}">Show all meetings</a>
+      {% elif f.view == 'all' %}
+        {{ total }} {{ 'meeting' if total == 1 else 'meetings' }}.
+        <a href="{{ qs(qbase, view=None, page=None) }}">Show finished only</a>
+      {% else %}
+        {{ total }} {{ 'meeting' if total == 1 else 'meetings' }}.
+      {% endif %}
       Last sync: {{ last_sync | ago }}.
     </p>
   </div>
@@ -37,17 +47,16 @@
   {# Chipy POD formularzem: nad checkboxami przy pierwszym filtrze zsuwały
      listę pod kursor. Rosną w dół — punkty kliknięcia filtrów stoją w miejscu. #}
   <div class="filters-col">
-    {% with action='/meetings', show_status=True, show_transcript=True %}
+    {% with action='/meetings', show_status=True %}
       {% include "_filters.html" %}
     {% endwith %}
     {% if f.is_active() %}
     <div class="chips" aria-label="Active filters">
       {% if f.q %}<span class="chip">“{{ f.q }}” <a href="{{ qs(qbase, q=None, page=None) }}" aria-label="Remove text filter">×</a></span>{% endif %}
-      {% for s in f.statuses %}<span class="chip">{{ STATUS_GROUPS[s] }} <a href="{{ qs(qbase, status=f.statuses | reject('equalto', s) | list, page=None) }}" aria-label="Remove status filter">×</a></span>{% endfor %}
+      {% for s in f.statuses %}<span class="chip">{{ USER_STATUSES[s] }} <a href="{{ qs(qbase, status=f.statuses | reject('equalto', s) | list, page=None) }}" aria-label="Remove status filter">×</a></span>{% endfor %}
       {% for p in f.participants %}<span class="chip">{{ p }} <a href="{{ qs(qbase, participant=f.participants | reject('equalto', p) | list, page=None) }}" aria-label="Remove person filter">×</a></span>{% endfor %}
       {% if f.date_from %}<span class="chip">from {{ f.date_from }} <a href="{{ qs(qbase, date_from=None, page=None) }}" aria-label="Remove start date">×</a></span>{% endif %}
       {% if f.date_to %}<span class="chip">to {{ f.date_to }} <a href="{{ qs(qbase, date_to=None, page=None) }}" aria-label="Remove end date">×</a></span>{% endif %}
-      {% if f.transcript %}<span class="chip">{{ TRANSCRIPT_FILTERS[f.transcript] }} <a href="{{ qs(qbase, transcript=None, page=None) }}" aria-label="Remove transcript filter">×</a></span>{% endif %}
     </div>
     {% endif %}
   </div>
@@ -167,6 +176,12 @@
       {% call ui.empty(ui.art_meetings(), 'Nothing matches the filters',
                        'Try widening the date range or unchecking some people.') %}
         <a class="btn btn-primary" href="/meetings">Clear filters</a>
+      {% endcall %}
+    {% elif f.default_view %}
+      {# Domyślny widok „Finished” nie jest filtrem — ma własny stan pusty. #}
+      {% call ui.empty(ui.art_meetings(), 'No finished meetings yet',
+                       'Meetings land here once they end — transcribed, waiting to process, or failed.') %}
+        <a class="btn btn-primary" href="{{ qs(qbase, view='all', page=None) }}">Show all meetings</a>
       {% endcall %}
     {% else %}
       {% call ui.empty(ui.art_meetings(), 'No meetings yet',

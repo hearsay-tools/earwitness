@@ -13,7 +13,15 @@ from typing import Any, Optional
 from sqlalchemy import Case, Select, and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
-from webapp.models import Meeting, MeetingParticipant, Transcript, looks_like_bot
+from webapp.models import (
+    USER_STATUS_ORDER,
+    Meeting,
+    MeetingParticipant,
+    Transcript,
+    looks_like_bot,
+    user_status_case,
+    utcnow,
+)
 
 OCCURRED = func.coalesce(Meeting.started_at, Meeting.join_at)
 
@@ -46,16 +54,13 @@ def next_sort(column: str, current: str) -> str:
     primary, reverse = _SORT_PAIR[column]
     return reverse if current == primary else primary
 
-# Kolejność „pipeline'owa", nie alfabetyczna — scheduled→…→expired / none→ready.
-_STATUS_RANK: Case = case(
-    (Meeting.status_group == "scheduled", 0),
-    (Meeting.status_group == "joining", 1),
-    (Meeting.status_group == "recording", 2),
-    (Meeting.status_group == "done", 3),
-    (Meeting.status_group == "failed", 4),
-    (Meeting.status_group == "expired", 5),
-    else_=9,
-)
+# Rangi statusu użytkownika budujemy z tego samego wyrażenia CASE co filtry
+# i fasetty — jedna para reguł, zero rozjazdu (patrz `user_status_case`).
+def _user_status_rank() -> Case:
+    expr = user_status_case(utcnow())
+    return case(*[(expr == s, i) for i, s in enumerate(USER_STATUS_ORDER)], else_=9)
+
+# Sortowanie po kolumnie „Transcript” zostaje — to informacja, nie filtr.
 _TRANSCRIPT_RANK: Case = case(
     (Meeting.transcript_state == "none", 0),
     (Meeting.transcript_state == "queued", 1),
@@ -65,38 +70,33 @@ _TRANSCRIPT_RANK: Case = case(
     else_=9,
 )
 
-TRANSCRIPT_FILTERS = {
-    "": "All",
-    "ready": "With transcript",
-    "none": "Without transcript",
-    "queued": "Queued / running",
-    "failed": "Transcription failed",
-}
-
-
 @dataclass
 class MeetingFilters:
     q: str = ""
-    statuses: list[str] = field(default_factory=list)
+    statuses: list[str] = field(default_factory=list)  # klucze USER_STATUS_ORDER
     participants: list[str] = field(default_factory=list)
     date_from: Optional[dt.date] = None
     date_to: Optional[dt.date] = None
-    transcript: str = ""
+    # Widok domyślny „Finished” seeduje `statuses` w warstwie HTTP (app.py).
+    # `default_view=True` oznacza „statuses są zasiane, to nie jest filtr
+    # użytkownika” — steruje chipami, podtytułem i as_query_dict.
+    view: str = ""  # "" (domyślny Finished) | "all"
+    default_view: bool = False
     sort: str = "date_desc"
     page: int = 1
     per_page: int = 25
 
     def is_active(self) -> bool:
         return bool(
-            self.q or self.statuses or self.participants
-            or self.date_from or self.date_to or self.transcript
+            self.q or (self.statuses and not self.default_view) or self.participants
+            or self.date_from or self.date_to
         )
 
     def as_query_dict(self, **overrides: Any) -> dict[str, Any]:
         d: dict[str, Any] = {}
         if self.q:
             d["q"] = self.q
-        if self.statuses:
+        if self.statuses and not self.default_view:
             d["status"] = self.statuses
         if self.participants:
             d["participant"] = self.participants
@@ -104,8 +104,8 @@ class MeetingFilters:
             d["date_from"] = self.date_from.isoformat()
         if self.date_to:
             d["date_to"] = self.date_to.isoformat()
-        if self.transcript:
-            d["transcript"] = self.transcript
+        if self.view == "all":
+            d["view"] = "all"
         if self.sort != "date_desc":
             d["sort"] = self.sort
         if self.page > 1:
@@ -134,7 +134,7 @@ def apply_filters(stmt: Select, f: MeetingFilters) -> Select:
                 )
             )
     if f.statuses:
-        stmt = stmt.where(Meeting.status_group.in_(f.statuses))
+        stmt = stmt.where(user_status_case(utcnow()).in_(f.statuses))
     if f.date_from:
         stmt = stmt.where(OCCURRED >= _as_utc(f.date_from))
     if f.date_to:
@@ -148,14 +148,6 @@ def apply_filters(stmt: Select, f: MeetingFilters) -> Select:
                 )
             )
         )
-    if f.transcript == "ready":
-        stmt = stmt.where(Meeting.transcript_state == "ready")
-    elif f.transcript == "none":
-        stmt = stmt.where(Meeting.transcript_state == "none")
-    elif f.transcript == "queued":
-        stmt = stmt.where(Meeting.transcript_state.in_(("queued", "running")))
-    elif f.transcript == "failed":
-        stmt = stmt.where(Meeting.transcript_state == "failed")
     return stmt
 
 
@@ -171,9 +163,9 @@ def _order(stmt: Select, sort: str) -> Select:
     if sort == "title_desc":
         return stmt.order_by(func.lower(Meeting.title).desc(), Meeting.id)
     if sort == "status_asc":
-        return stmt.order_by(_STATUS_RANK.asc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(_user_status_rank().asc(), OCCURRED.desc().nulls_last(), Meeting.id)
     if sort == "status_desc":
-        return stmt.order_by(_STATUS_RANK.desc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(_user_status_rank().desc(), OCCURRED.desc().nulls_last(), Meeting.id)
     if sort == "transcript_asc":
         return stmt.order_by(_TRANSCRIPT_RANK.asc(), OCCURRED.desc().nulls_last(), Meeting.id)
     if sort == "transcript_desc":
@@ -193,9 +185,10 @@ def search_meetings(session: Session, f: MeetingFilters) -> tuple[list[Meeting],
 def status_facets(session: Session, f: MeetingFilters) -> dict[str, int]:
     """Liczniki statusów przy pozostałych filtrach (bez filtra statusu)."""
     probe = MeetingFilters(**{**f.__dict__, "statuses": []})
+    expr = user_status_case(utcnow())
     rows = session.execute(
         apply_filters(
-            select(Meeting.status_group, func.count(Meeting.id)).group_by(Meeting.status_group),
+            select(expr, func.count(Meeting.id)).group_by(expr),
             probe,
         )
     ).all()

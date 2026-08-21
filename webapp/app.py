@@ -46,7 +46,8 @@ from webapp.jobs import cancel as cancel_job
 from webapp.jobs import enqueue, queue_stats
 from webapp.models import (
     ACTIVE_JOB_STATES,
-    STATUS_GROUPS,
+    DEFAULT_VIEW_STATUSES,
+    USER_STATUS_ORDER,
     Job,
     Meeting,
     Transcript,
@@ -55,7 +56,6 @@ from webapp.models import (
 )
 from webapp.queries import (
     SORTS,
-    TRANSCRIPT_FILTERS,
     MeetingFilters,
     next_sort,
     participant_facets,
@@ -134,11 +134,11 @@ templates.env.filters["jobstatus"] = labels.job_status
 templates.env.filters["assetstate"] = labels.asset_state
 templates.env.filters["tstate"] = labels.transcript_state
 templates.env.filters["platform"] = labels.platform
-templates.env.globals["STATUS_GROUPS"] = STATUS_GROUPS
 templates.env.globals["JOB_STATUSES"] = labels.JOB_STATUSES
 templates.env.globals["SORTS"] = SORTS
-templates.env.globals["TRANSCRIPT_FILTERS"] = TRANSCRIPT_FILTERS
 templates.env.globals["status_hint"] = labels.status_hint
+templates.env.globals["USER_STATUSES"] = labels.USER_STATUSES
+templates.env.globals["USER_STATUS_ORDER"] = USER_STATUS_ORDER
 
 
 def qs(base: dict[str, Any], **overrides: Any) -> str:
@@ -336,18 +336,24 @@ def _filters(
     participant: Optional[list[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    transcript: str = "",
+    view: str = "",
     sort: str = "date_desc",
     page: int = 1,
     per_page: int = 25,
 ) -> MeetingFilters:
+    statuses = [s for s in (status or []) if s in USER_STATUS_ORDER]
+    # Bez explicitego statusu pokazujemy widok „Finished” — wszystko, co się
+    # zakończyło (z transkryptem, do przetworzenia, nieudane, bez nagrania).
+    # `?view=all` albo dowolny status = pełna/jawna kontrola.
+    default_view = not statuses and view != "all"
     return MeetingFilters(
         q=(q or "").strip(),
-        statuses=[s for s in (status or []) if s in STATUS_GROUPS],
+        statuses=statuses or (list(DEFAULT_VIEW_STATUSES) if default_view else []),
         participants=[p for p in (participant or []) if p],
         date_from=_parse_date(date_from),
         date_to=_parse_date(date_to),
-        transcript=transcript if transcript in TRANSCRIPT_FILTERS else "",
+        view=view if view == "all" else "",
+        default_view=default_view,
         sort=sort if sort in SORTS else "date_desc",
         page=max(1, page),
         per_page=min(100, max(5, per_page)),
@@ -369,11 +375,11 @@ def meetings_view(
     participant: list[str] = Query(default=[]),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    transcript: str = "",
+    view: str = "",
     sort: str = "date_desc",
     page: int = 1,
 ):
-    f = _filters(q, status, participant, date_from, date_to, transcript, sort, page)
+    f = _filters(q, status, participant, date_from, date_to, view, sort, page)
     rows, total = search_meetings(session, f)
     active_jobs = _active_jobs_by_meeting(session, [m.id for m in rows])
     return render(request, "meetings.html", {
@@ -500,7 +506,7 @@ def transcripts_view(
     sort: str = "date_desc",
     page: int = 1,
 ):
-    f = _filters(q, status, participant, date_from, date_to, "ready", sort, page)
+    f = _filters(q, status, participant, date_from, date_to, sort, page)
     rows, total = transcript_rows(session, f)
     return render(request, "transcripts.html", {
         "rows": rows,
@@ -734,6 +740,7 @@ def _meeting_json(m: Meeting) -> dict[str, Any]:
         "occurred_at": m.occurred_at.isoformat() if m.occurred_at else None,
         "duration_seconds": m.duration_seconds,
         "status": m.status_group,
+        "user_status": m.user_status,
         "status_code": m.status_code,
         "asset_state": m.asset_state,
         "transcript_state": m.transcript_state,
@@ -755,12 +762,12 @@ def api_meetings(
     participant: list[str] = Query(default=[]),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    transcript: str = "",
+    view: str = "all",  # integracje widzą wszystko, bez domyślnego widoku
     sort: str = "date_desc",
     page: int = 1,
     per_page: int = 25,
 ):
-    f = _filters(q, status, participant, date_from, date_to, transcript, sort, page, per_page)
+    f = _filters(q, status, participant, date_from, date_to, view, sort, page, per_page)
     rows, total = search_meetings(session, f)
     return {"total": total, "page": f.page, "items": [_meeting_json(m) for m in rows]}
 

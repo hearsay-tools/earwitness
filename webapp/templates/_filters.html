@@ -1,5 +1,5 @@
-{# Boczny panel filtrów. `action` = ścieżka docelowa, `show_status` /
-   `show_transcript` sterują widocznością sekcji zależnych od kontekstu. #}
+{# Boczny panel filtrów. `action` = ścieżka docelowa, `show_status` steruje
+   widocznością sekcji zależnymi od kontekstu. #}
 <form class="card card-pad filters" method="get" action="{{ action }}" data-autosubmit
       aria-label="Filters">
   <div class="field">
@@ -30,25 +30,14 @@
   <div class="field">
     <fieldset>
       <legend>Status</legend>
-      {% for key, label in STATUS_GROUPS.items() %}
+      {% for key in USER_STATUS_ORDER %}
         <label class="check">
           <input type="checkbox" name="status" value="{{ key }}" {{ 'checked' if key in f.statuses }}>
-          <span class="lbl">{{ label }}</span>
+          <span class="lbl">{{ USER_STATUSES[key] }}</span>
           <span class="count">{{ facets.get(key, 0) }}</span>
         </label>
       {% endfor %}
     </fieldset>
-  </div>
-  {% endif %}
-
-  {% if show_transcript %}
-  <div class="field">
-    <label for="transcript">Transcript</label>
-    <select name="transcript" id="transcript">
-      {% for key, label in TRANSCRIPT_FILTERS.items() %}
-        <option value="{{ key }}" {{ 'selected' if f.transcript == key }}>{{ label }}</option>
-      {% endfor %}
-    </select>
   </div>
   {% endif %}
 

@@ -20,8 +20,10 @@
 {%- endmacro %}
 
 {% macro meeting_badge(m) -%}
-  {{ badge('meeting', m.status_group, STATUS_GROUPS[m.status_group],
-           'Recall: ' ~ (m.status_code or '?') ~ (' / ' ~ m.status_sub_code if m.status_sub_code else '')) }}
+  {%- set hint = status_hint(m.status_sub_code) -%}
+  {{ badge('meeting', m.user_status, USER_STATUSES.get(m.user_status, m.user_status),
+           'Recall: ' ~ (m.status_code or '?') ~ (' / ' ~ m.status_sub_code if m.status_sub_code else '')
+           ~ (' — ' ~ hint if hint else '')) }}
 {%- endmacro %}
 
 {# ---------- pasek postępu ----------

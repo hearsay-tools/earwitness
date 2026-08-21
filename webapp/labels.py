@@ -54,6 +54,19 @@ TRANSCRIPT_STATES: dict[str, str] = {
     "failed": "Failed",
 }
 
+# Status spotkania widoczny w UI — jedna oś wyprowadzana w webapp/models.py
+# (kolejność = cykl życia). Surowy stan Recalla zostaje w tooltipach
+# i w „Status in Recall” na szczegółach spotkania.
+USER_STATUSES: dict[str, str] = {
+    "upcoming": "Upcoming",
+    "in_meeting": "In meeting",
+    "processing": "Processing",
+    "to_process": "To process",
+    "ready": "Ready",
+    "failed": "Failed",
+    "no_recording": "No recording",
+}
+
 PLATFORMS: dict[str, str] = {
     "google_meet": "Google Meet",
     "zoom": "Zoom",
@@ -98,6 +111,10 @@ def asset_state(value: Optional[str]) -> str:
 
 def transcript_state(value: Optional[str]) -> str:
     return _lookup(TRANSCRIPT_STATES, value)
+
+
+def user_status(value: Optional[str]) -> str:
+    return _lookup(USER_STATUSES, value)
 
 
 def platform(value: Optional[str]) -> str:

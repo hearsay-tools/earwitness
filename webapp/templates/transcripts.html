@@ -11,7 +11,7 @@
 </div>
 
 <div class="split">
-  {% with action='/transcripts', show_status=False, show_transcript=False, facets={} %}
+  {% with action='/transcripts', show_status=False, facets={} %}
     {% include "_filters.html" %}
   {% endwith %}
 
@@ -68,7 +68,7 @@
     {% else %}
       {% call ui.empty(ui.art_transcripts(), 'No transcripts yet',
                        'Pick a finished meeting with a recording and kick off processing — it comes back here split by speaker.') %}
-        <a class="btn btn-primary" href="/meetings?status=done&transcript=none">Find a meeting to process</a>
+        <a class="btn btn-primary" href="/meetings?status=to_process">Find a meeting to process</a>
       {% endcall %}
     {% endif %}
   </div>
