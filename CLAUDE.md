@@ -63,3 +63,19 @@ PoC transkrypcji spotkań z nagrań Recall.ai. Stan i decyzje:
 - Nagrania Recall mają TTL (default 24h) — assety ściągać zaraz po spotkaniu.
 - `output/`, `audio/` i `experiments/` są gitignored — nie commituj nagrań,
   transkryptów ani logów eksperymentów (imiona, cytaty, ID botów).
+
+## Area labels
+
+Issues carry exactly one area label naming the part of the system or
+process they touch. The labels on GitHub are the source of truth — each
+label's description states its boundary; this table is a map for picking
+one:
+
+| Label | Covers |
+|---|---|
+| `pipeline` | ASR, diarization, overlap recovery under `transcripts/` |
+| `recall` | Recall.ai bot lifecycle, asset fetch, TTL handling |
+| `webapp` | the FastAPI app, Jinja2 templates, auth, the job queue |
+| `infra` | Docker, `docker-compose.yml`, GitHub Actions |
+| `docs` | README, `CLAUDE.md` |
+| `process` | repo development process: issue templates, triage, review automation, dev-flow |
