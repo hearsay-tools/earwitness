@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from scripts import issue_intake as intake
 
 REPO_LABELS = [
@@ -27,11 +26,13 @@ def test_area_candidates_empty_when_taxonomy_absent():
 
 
 def test_parse_model_json_plain():
-    assert intake.parse_model_json('{"area_label": "webapp"}') == {"area_label": "webapp"}
+    assert intake.parse_model_json('{"area_label": "webapp"}') == {
+        "area_label": "webapp"
+    }
 
 
 def test_parse_model_json_fenced():
-    raw = "```json\n{\"area_label\": \"docs\"}\n```"
+    raw = '```json\n{"area_label": "docs"}\n```'
     assert intake.parse_model_json(raw) == {"area_label": "docs"}
 
 
@@ -47,7 +48,10 @@ def test_parse_model_json_garbage_returns_none(raw):
 
 def test_normalize_result_happy_path_with_duplicate():
     out = intake.normalize_result(
-        {"area_label": "webapp", "duplicate": {"number": 3, "confidence": "high", "reason": "same bug"}},
+        {
+            "area_label": "webapp",
+            "duplicate": {"number": 3, "confidence": "high", "reason": "same bug"},
+        },
         CANDIDATES,
         {3, 7},
     )
@@ -57,7 +61,10 @@ def test_normalize_result_happy_path_with_duplicate():
 
 def test_normalize_result_strips_reason_whitespace_and_caps_confidence():
     out = intake.normalize_result(
-        {"area_label": "webapp", "duplicate": {"number": 3, "confidence": "HIGH", "reason": "  x  "}},
+        {
+            "area_label": "webapp",
+            "duplicate": {"number": 3, "confidence": "HIGH", "reason": "  x  "},
+        },
         CANDIDATES,
         {3},
     )
@@ -77,7 +84,10 @@ def test_normalize_result_none_input_raises():
 
 def test_normalize_result_drops_duplicate_outside_open_issues():
     out = intake.normalize_result(
-        {"area_label": "webapp", "duplicate": {"number": 99, "confidence": "high", "reason": "x"}},
+        {
+            "area_label": "webapp",
+            "duplicate": {"number": 99, "confidence": "high", "reason": "x"},
+        },
         CANDIDATES,
         {3},
     )
@@ -94,7 +104,9 @@ def test_normalize_result_defaults_confidence_to_low():
 
 
 def test_normalize_result_none_duplicate_ok():
-    out = intake.normalize_result({"area_label": "process", "duplicate": None}, CANDIDATES, set())
+    out = intake.normalize_result(
+        {"area_label": "process", "duplicate": None}, CANDIDATES, set()
+    )
     assert out == {"area_label": "process", "duplicate": None}
 
 
@@ -107,7 +119,9 @@ RESULT = {
 
 def test_plan_apply_adds_area_and_duplicate_labels_when_closing():
     plan = intake.plan_apply(
-        RESULT, trigger_number=5, live_labels={"webapp", "duplicate"},
+        RESULT,
+        trigger_number=5,
+        live_labels={"webapp", "duplicate"},
         duplicate_target={"html_url": "u", "state": "open"},
     )
     assert plan["add_labels"] == ["webapp", "duplicate"]
@@ -115,17 +129,23 @@ def test_plan_apply_adds_area_and_duplicate_labels_when_closing():
 
 def test_plan_apply_mismatched_issue_number_raises():
     with pytest.raises(ValueError):
-        intake.plan_apply(RESULT, trigger_number=6, live_labels={"webapp"}, duplicate_target=None)
+        intake.plan_apply(
+            RESULT, trigger_number=6, live_labels={"webapp"}, duplicate_target=None
+        )
 
 
 def test_plan_apply_label_not_live_raises():
     with pytest.raises(ValueError):
-        intake.plan_apply(RESULT, trigger_number=5, live_labels={"bug"}, duplicate_target=None)
+        intake.plan_apply(
+            RESULT, trigger_number=5, live_labels={"bug"}, duplicate_target=None
+        )
 
 
 def test_plan_apply_closes_on_high_confidence_duplicate():
     plan = intake.plan_apply(
-        RESULT, trigger_number=5, live_labels={"webapp", "duplicate"},
+        RESULT,
+        trigger_number=5,
+        live_labels={"webapp", "duplicate"},
         duplicate_target={"html_url": "https://github.com/r/i/3", "state": "open"},
     )
     assert plan["close"] is True
@@ -136,7 +156,9 @@ def test_plan_apply_closes_on_high_confidence_duplicate():
 def test_plan_apply_low_confidence_comments_but_does_not_close():
     result = dict(RESULT, duplicate={"number": 3, "confidence": "low", "reason": "x"})
     plan = intake.plan_apply(
-        result, trigger_number=5, live_labels={"webapp"},
+        result,
+        trigger_number=5,
+        live_labels={"webapp"},
         duplicate_target={"html_url": "https://github.com/r/i/3", "state": "open"},
     )
     assert plan["close"] is False
@@ -146,17 +168,26 @@ def test_plan_apply_low_confidence_comments_but_does_not_close():
 
 def test_plan_apply_no_duplicate_no_comment_no_close():
     result = dict(RESULT, duplicate=None)
-    plan = intake.plan_apply(result, trigger_number=5, live_labels={"webapp"}, duplicate_target=None)
+    plan = intake.plan_apply(
+        result, trigger_number=5, live_labels={"webapp"}, duplicate_target=None
+    )
     assert plan == {"add_labels": ["webapp"], "comment": None, "close": False}
 
 
 def test_plan_apply_drops_duplicate_when_target_not_open():
-    plan = intake.plan_apply(RESULT, trigger_number=5, live_labels={"webapp"}, duplicate_target=None)
+    plan = intake.plan_apply(
+        RESULT, trigger_number=5, live_labels={"webapp"}, duplicate_target=None
+    )
     assert plan == {"add_labels": ["webapp"], "comment": None, "close": False}
 
 
 def test_plan_apply_skips_duplicate_label_if_repo_lacks_it():
-    plan = intake.plan_apply(RESULT, trigger_number=5, live_labels={"webapp"}, duplicate_target={"html_url": "u", "state": "open"})
+    plan = intake.plan_apply(
+        RESULT,
+        trigger_number=5,
+        live_labels={"webapp"},
+        duplicate_target={"html_url": "u", "state": "open"},
+    )
     assert plan["add_labels"] == ["webapp"]
     assert plan["close"] is True
 
@@ -174,7 +205,9 @@ def test_truncate_cuts_long_text_with_marker():
 def test_build_prompt_includes_issue_and_candidates():
     issue = {"number": 5, "title": "Fix sync", "body": "Sync fails at midnight"}
     open_issues = [{"number": 3, "title": "Sync broken", "body": "fails"}]
-    prompt = intake.build_prompt(issue, [{"name": "webapp", "description": "FastAPI app"}], open_issues)
+    prompt = intake.build_prompt(
+        issue, [{"name": "webapp", "description": "FastAPI app"}], open_issues
+    )
     assert "Fix sync" in prompt
     assert "webapp" in prompt
     assert "#3" in prompt

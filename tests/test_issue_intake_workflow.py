@@ -6,9 +6,7 @@ from pathlib import Path
 
 import yaml
 
-WORKFLOW = yaml.safe_load(
-    Path(".github/workflows/issue-intake.yml").read_text()
-)
+WORKFLOW = yaml.safe_load(Path(".github/workflows/issue-intake.yml").read_text())
 
 
 def _job(name):
@@ -46,8 +44,12 @@ def test_apply_job_carries_no_model_provider_credential():
 
 def test_provider_steps_carry_only_their_matching_secret():
     steps = _job("analyze")["steps"]
-    claude = next(s for s in steps if s.get("name", "").startswith("Analyze issue (claude"))
-    codex = next(s for s in steps if s.get("name", "").startswith("Analyze issue (codex"))
+    claude = next(
+        s for s in steps if s.get("name", "").startswith("Analyze issue (claude")
+    )
+    codex = next(
+        s for s in steps if s.get("name", "").startswith("Analyze issue (codex")
+    )
     assert set(claude["env"]) == {"ANTHROPIC_API_KEY"}
     assert set(codex["env"]) == {"OPENAI_API_KEY"}
     assert "vars.ISSUE_INTAKE_PROVIDER" in claude["if"]

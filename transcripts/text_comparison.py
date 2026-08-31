@@ -15,14 +15,30 @@ from dataclasses import dataclass
 
 from .comparison import Utterance
 
-
 _WORD_RE = re.compile(r"[\w']+", re.UNICODE)
 
 # rozszerzony zestaw fillerów / minimal-content dla EN i PL
 _FILLERS = {
-    "uh", "um", "ah", "eh", "er", "hmm", "mhm", "uhm",
-    "yeah", "yep", "yup", "ok", "okay", "right", "alright",
-    "tak", "no", "yhm", "eee", "yyy",
+    "uh",
+    "um",
+    "ah",
+    "eh",
+    "er",
+    "hmm",
+    "mhm",
+    "uhm",
+    "yeah",
+    "yep",
+    "yup",
+    "ok",
+    "okay",
+    "right",
+    "alright",
+    "tak",
+    "no",
+    "yhm",
+    "eee",
+    "yyy",
 }
 
 
@@ -110,15 +126,20 @@ def format_text_report(
     lines.append("-" * (sum(widths) + 2 * (len(widths) - 1)))
     for n in names:
         s = stats[n]
-        lines.append(_row([
-            n,
-            f"{s.chars}",
-            f"{s.words}",
-            f"{s.unique_words}",
-            f"{s.fillers}",
-            f"{s.filler_pct:.1f}%",
-            f"{s.wpm:.0f}",
-        ], widths))
+        lines.append(
+            _row(
+                [
+                    n,
+                    f"{s.chars}",
+                    f"{s.words}",
+                    f"{s.unique_words}",
+                    f"{s.fillers}",
+                    f"{s.filler_pct:.1f}%",
+                    f"{s.wpm:.0f}",
+                ],
+                widths,
+            )
+        )
     lines.append("")
 
     # 2. Pairwise Jaccard
@@ -145,18 +166,15 @@ def format_text_report(
     # 3. Unikalne słowa (tylko w tym źródle)
     lines.append("=" * 78)
     lines.append(f"SŁOWA UNIKALNE DLA ŹRÓDŁA (top {unique_top_n} po częstości)")
-    lines.append("Wskazują na halucynacje albo na słowa wyłapane TYLKO przez ten silnik")
+    lines.append(
+        "Wskazują na halucynacje albo na słowa wyłapane TYLKO przez ten silnik"
+    )
     lines.append("=" * 78)
-    all_words = set().union(*word_sets.values())
     for n in names:
-        only_here = word_sets[n] - set().union(
-            *(word_sets[m] for m in names if m != n)
-        )
+        only_here = word_sets[n] - set().union(*(word_sets[m] for m in names if m != n))
         top = sorted(only_here, key=lambda w: -stats[n].word_counts[w])[:unique_top_n]
         if top:
-            display = ", ".join(
-                f"{w}×{stats[n].word_counts[w]}" for w in top
-            )
+            display = ", ".join(f"{w}×{stats[n].word_counts[w]}" for w in top)
         else:
             display = "(brak)"
         lines.append(f"  {n}: {display}")

@@ -19,8 +19,8 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from transcripts.recall_client import RecallClient, RecallConfig
+
 from webapp.config import settings
 from webapp.models import (
     Meeting,
@@ -56,7 +56,9 @@ def _fetch_json(url: str, timeout: float = 30.0) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _last_status(bot: dict) -> tuple[Optional[str], Optional[str], Optional[dt.datetime]]:
+def _last_status(
+    bot: dict,
+) -> tuple[Optional[str], Optional[str], Optional[dt.datetime]]:
     changes = bot.get("status_changes") or []
     if not changes:
         return None, None, None
@@ -69,7 +71,7 @@ def _pick_recording(bot: dict) -> Optional[dict]:
     recs = bot.get("recordings") or []
     if not recs:
         return None
-    return sorted(recs, key=lambda r: (r.get("started_at") or ""), reverse=True)[0]
+    return sorted(recs, key=lambda r: r.get("started_at") or "", reverse=True)[0]
 
 
 def _norm_key(name: Optional[str], email: Optional[str]) -> str:
@@ -105,7 +107,9 @@ def _rec_dir_ready(rec_dir: Path) -> bool:
         return False
     if not any(rec_dir.glob("audio_mixed*.mp3")):
         return False
-    raw_artifacts = [a for a in meta.get("audio_separate", []) if a.get("format") == "raw"]
+    raw_artifacts = [
+        a for a in meta.get("audio_separate", []) if a.get("format") == "raw"
+    ]
     if not raw_artifacts:
         return False
     manifest = rec_dir / "audio_separate" / f"parts_{raw_artifacts[0]['id'][:8]}.json"
@@ -125,7 +129,9 @@ def _discover_recording_dir(bot_id: str) -> Optional[Path]:
     bot_dir = settings.recall_dir / bot_id
     if not bot_dir.is_dir():
         return None
-    ready = [p.parent for p in bot_dir.glob("*/recording.json") if _rec_dir_ready(p.parent)]
+    ready = [
+        p.parent for p in bot_dir.glob("*/recording.json") if _rec_dir_ready(p.parent)
+    ]
     if not ready:
         return None
     # Bot ma w praktyce jedno nagranie; gdy jest ich kilka, bierzemy najnowsze.
@@ -171,7 +177,9 @@ def adopt_disk_recording(meeting: Meeting, rec_dir: Path, recording_id: str) -> 
     meta = _read_rec_meta(rec_dir) or {}
     meeting.started_at = meeting.started_at or parse_ts(meta.get("started_at"))
     meeting.completed_at = meeting.completed_at or parse_ts(meta.get("completed_at"))
-    meeting.media_expires_at = meeting.media_expires_at or parse_ts(meta.get("expires_at"))
+    meeting.media_expires_at = meeting.media_expires_at or parse_ts(
+        meta.get("expires_at")
+    )
     if not meeting.duration_seconds and meeting.started_at and meeting.completed_at:
         meeting.duration_seconds = (
             meeting.completed_at - meeting.started_at
@@ -195,6 +203,7 @@ def _replace_participants(
     dwukrotnie na liście filtrów. Dlatego szukamy istniejącego wiersza także
     po adresie i po nazwie, a znaleziony wiersz przenosimy na aktualny klucz.
     """
+
     def norm(value: Optional[str]) -> str:
         return " ".join((value or "").strip().lower().split())
 
@@ -278,7 +287,9 @@ def rekey_participants(meeting: Meeting) -> int:
     return changed
 
 
-def resolve_identities(session: Session, meeting: Optional[Meeting] = None) -> dict[str, int]:
+def resolve_identities(
+    session: Session, meeting: Optional[Meeting] = None
+) -> dict[str, int]:
     """Dopasuj nazwy z Recall do adresów z zaproszeń i przeklucz uczestników.
 
     Bez argumentu leci po wszystkich spotkaniach — używane jako backfill
@@ -290,8 +301,10 @@ def resolve_identities(session: Session, meeting: Optional[Meeting] = None) -> d
         resolve_meeting,
     )
 
-    meetings = [meeting] if meeting is not None else list(
-        session.execute(select(Meeting)).scalars()
+    meetings = (
+        [meeting]
+        if meeting is not None
+        else list(session.execute(select(Meeting)).scalars())
     )
     total = {"meetings": 0, "matched": 0, "left": 0, "rekeyed": 0}
     for m in meetings:
@@ -304,8 +317,10 @@ def resolve_identities(session: Session, meeting: Optional[Meeting] = None) -> d
         rebuild_search_blob(m)
     # Druga runda: to, co poznaliśmy w jednym spotkaniu, uzupełnia braki
     # w pozostałych. Musi lecieć po dopasowaniu, bo z niego się uczy.
-    all_meetings = meetings if meeting is None else list(
-        session.execute(select(Meeting)).scalars()
+    all_meetings = (
+        meetings
+        if meeting is None
+        else list(session.execute(select(Meeting)).scalars())
     )
     total["propagated"] = propagate_known_emails(all_meetings)
     # Trzecia runda: nazwy, których nie było w żadnym zaproszeniu tego
@@ -329,9 +344,11 @@ def backfill_names_by_email(session: Session) -> int:
     `displayName`, wyświetlałby się jako goły adres, mimo że w nagraniu obok
     występuje pod imieniem i nazwiskiem.
     """
-    rows = list(session.execute(
-        select(MeetingParticipant).where(MeetingParticipant.email.is_not(None))
-    ).scalars())
+    rows = list(
+        session.execute(
+            select(MeetingParticipant).where(MeetingParticipant.email.is_not(None))
+        ).scalars()
+    )
 
     # Najkrótsza nazwa wygrywa: „Jan Kowalski" nad „Jan Kowalski (Acme)".
     best: dict[str, str] = {}
@@ -450,7 +467,9 @@ def upsert_bot(session: Session, bot: dict, fetch_participants: bool = True) -> 
         # fetchu; tu zakładamy, że jest, jeśli nagranie w ogóle powstało.
         meeting.has_audio_separate = bool(rec.get("id"))
 
-        if fetch_participants and not any(p.source == "recall" for p in meeting.participants):
+        if fetch_participants and not any(
+            p.source == "recall" for p in meeting.participants
+        ):
             people = _fetch_recall_participants(rec)
             if people:
                 _replace_participants(session, meeting, "recall", people)
@@ -469,9 +488,10 @@ def upsert_bot(session: Session, bot: dict, fetch_participants: bool = True) -> 
         meeting.asset_state = "ready"
         meeting.asset_dir = path
     elif meeting.asset_state in ("none", "expired", "failed"):
-        expired = bool(
-            meeting.media_expires_at and meeting.media_expires_at < utcnow()
-        ) or meeting.status_code == "media_expired"
+        expired = (
+            bool(meeting.media_expires_at and meeting.media_expires_at < utcnow())
+            or meeting.status_code == "media_expired"
+        )
         meeting.asset_state = "expired" if expired else "none"
 
     session.flush()
@@ -506,9 +526,9 @@ def _fallback_title(meeting: Meeting) -> str:
 
 def _fetch_recall_participants(rec: dict) -> list[dict[str, Any]]:
     """participants.json spod presigned URLa z media_shortcuts."""
-    data = (
-        (rec.get("media_shortcuts") or {}).get("participant_events") or {}
-    ).get("data") or {}
+    data = ((rec.get("media_shortcuts") or {}).get("participant_events") or {}).get(
+        "data"
+    ) or {}
     url = data.get("participants_download_url")
     if not url:
         return []
@@ -520,12 +540,14 @@ def _fetch_recall_participants(rec: dict) -> list[dict[str, Any]]:
     out = []
     for p in payload or []:
         name = p.get("name")
-        out.append({
-            "name": name,
-            "email": p.get("email"),
-            "is_host": bool(p.get("is_host")),
-            "is_bot": looks_like_bot(name, p.get("email")),
-        })
+        out.append(
+            {
+                "name": name,
+                "email": p.get("email"),
+                "is_host": bool(p.get("is_host")),
+                "is_bot": looks_like_bot(name, p.get("email")),
+            }
+        )
     return out
 
 
@@ -573,7 +595,9 @@ def sync_bots(
         bots: Iterable[dict] = (client.get_bot(b) for b in bot_ids)
         total_hint = len(bot_ids)
     else:
-        days = lookback_days if lookback_days is not None else settings.sync_lookback_days
+        days = (
+            lookback_days if lookback_days is not None else settings.sync_lookback_days
+        )
         after = (utcnow() - dt.timedelta(days=days)).replace(microsecond=0)
         bots = client.list_bots(join_at_after=after.isoformat().replace("+00:00", "Z"))
         total_hint = 0
@@ -615,7 +639,11 @@ def adopt_local_recordings(session: Session) -> dict[str, int]:
     stat = {"scanned": 0, "adopted": 0, "relinked": 0, "participants": 0}
     for meeting in session.execute(select(Meeting)).scalars():
         stat["scanned"] += 1
-        if meeting.asset_state == "ready" and meeting.recording_id and meeting.asset_dir:
+        if (
+            meeting.asset_state == "ready"
+            and meeting.recording_id
+            and meeting.asset_dir
+        ):
             continue
         state, path, found = local_asset_state(meeting.id, meeting.recording_id)
         if state != "ready" or not found or not path:
@@ -661,8 +689,10 @@ def meetings_ready_to_process(session: Session, limit: int = 50) -> list[Meeting
     for m in session.execute(q).scalars():
         if m.asset_state == "ready":
             out.append(m)
-        elif m.status_group == "done" and m.asset_state == "none" and (
-            m.media_expires_at is None or m.media_expires_at > utcnow()
+        elif (
+            m.status_group == "done"
+            and m.asset_state == "none"
+            and (m.media_expires_at is None or m.media_expires_at > utcnow())
         ):
             out.append(m)
     return out

@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-
 DEFAULT_MODEL = "collectiveai-team/speaker-diarization-3"
 DEFAULT_ASR_MODEL = "victor-upmeet/whisperx"
 
@@ -66,8 +65,9 @@ def diarize_cloud(
     Używa explicit predictions.create + polling zamiast replicate.run(),
     bo długie audio (>5 min) przekracza domyślny HTTP timeout.
     """
-    import replicate
     import time
+
+    import replicate
 
     if not os.environ.get("REPLICATE_API_TOKEN"):
         raise RuntimeError(
@@ -120,6 +120,7 @@ def _normalize(raw) -> list[DiarSegment]:
     if isinstance(raw, str):
         if raw.startswith("http"):
             import urllib.request
+
             with urllib.request.urlopen(raw) as f:
                 return _parse_text(f.read().decode("utf-8"))
         return _parse_text(raw)
@@ -132,6 +133,7 @@ def _normalize(raw) -> list[DiarSegment]:
         for v in raw.values():
             if isinstance(v, str) and v.startswith("http"):
                 import urllib.request
+
                 with urllib.request.urlopen(v) as f:
                     return _parse_text(f.read().decode("utf-8"))
         raise ValueError(f"Nieznany format dict z Replicate: keys={list(raw.keys())}")
@@ -153,6 +155,7 @@ def _to_seconds(v) -> float:
             return float(v)
         except ValueError:
             from .comparison import parse_timestamp
+
             return parse_timestamp(v)
     return 0.0
 
@@ -162,12 +165,7 @@ def _from_list(items: list) -> list[DiarSegment]:
     for it in items:
         if not isinstance(it, dict):
             continue
-        sp = (
-            it.get("speaker")
-            or it.get("label")
-            or it.get("speaker_id")
-            or "SPEAKER_?"
-        )
+        sp = it.get("speaker") or it.get("label") or it.get("speaker_id") or "SPEAKER_?"
         start = _to_seconds(it.get("start") or it.get("start_time"))
         end = _to_seconds(it.get("end") or it.get("stop") or it.get("end_time"))
         if end < start:
@@ -212,8 +210,9 @@ def transcribe_cloud(
     ElevenLabs raw response: {"words": [{text, start, end, type}, ...]}.
     Dzięki temu wynik można podać do `hybrid --elevenlabs-raw`.
     """
-    import replicate
     import time
+
+    import replicate
 
     if not os.environ.get("REPLICATE_API_TOKEN"):
         raise RuntimeError("Ustaw REPLICATE_API_TOKEN w env lub .env")
@@ -288,12 +287,14 @@ def _normalize_asr(raw) -> dict:
                     continue
                 start = _to_seconds(w.get("start"))
                 end = _to_seconds(w.get("end") or start)
-                words.append({
-                    "text": text if not words else " " + text.lstrip(),
-                    "start": start,
-                    "end": end,
-                    "type": "word",
-                })
+                words.append(
+                    {
+                        "text": text if not words else " " + text.lstrip(),
+                        "start": start,
+                        "end": end,
+                        "type": "word",
+                    }
+                )
     else:
         # fallback: chunks/segments na poziomie segmentu (bez word-level)
         items = raw.get("chunks") or segments or raw.get("words") or []
@@ -307,12 +308,14 @@ def _normalize_asr(raw) -> dict:
             else:
                 start = item.get("start") or 0.0
                 end = item.get("end") or item.get("stop") or start
-            words.append({
-                "text": " " + text if words else text,
-                "start": _to_seconds(start),
-                "end": _to_seconds(end),
-                "type": "word",
-            })
+            words.append(
+                {
+                    "text": " " + text if words else text,
+                    "start": _to_seconds(start),
+                    "end": _to_seconds(end),
+                    "type": "word",
+                }
+            )
 
     return {
         "text": raw.get("text", ""),
@@ -338,8 +341,9 @@ def transcribe_and_diarize(
     `prompt` to vocabulary hint dla Whispera — lista nazw własnych/akronimów
     z interpunkcją (np. 'Acme, Anna Nowak, Jan Kowalski.').
     """
-    import replicate
     import time
+
+    import replicate
 
     if not os.environ.get("REPLICATE_API_TOKEN"):
         raise RuntimeError("Ustaw REPLICATE_API_TOKEN w env lub .env")

@@ -68,9 +68,12 @@ from webapp.queries import (
 log = logging.getLogger("webapp")
 BASE_DIR = Path(__file__).resolve().parent
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     init_db()
     for w in settings.validate_for_serving():
         log.warning(w)
@@ -88,6 +91,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # --------------------------------------------------------------------------
 # Filtry szablonów
 # --------------------------------------------------------------------------
+
 
 def _fmt_dt(value: Optional[dt.datetime], fmt: str = "%Y-%m-%d %H:%M") -> str:
     if not value:
@@ -217,10 +221,19 @@ def healthz() -> dict[str, Any]:
 # Strony HTML dostają wersję brandowaną z drogą wyjścia; /api/ zostaje JSON-em.
 _ERROR_COPY = {
     404: ("No such page", "The link may be out of date, or the meeting was deleted."),
-    401: ("Sign-in required", "Sign in with your Google account to see the transcripts."),
+    401: (
+        "Sign-in required",
+        "Sign in with your Google account to see the transcripts.",
+    ),
     403: ("No access", "This account has no permission for that resource."),
-    410: ("The file is gone", "The transcript is in the database, but the file is no longer on disk."),
-    500: ("Something went wrong", "Server-side error. Details are in the application logs."),
+    410: (
+        "The file is gone",
+        "The transcript is in the database, but the file is no longer on disk.",
+    ),
+    500: (
+        "Something went wrong",
+        "Server-side error. Details are in the application logs.",
+    ),
 }
 
 
@@ -252,6 +265,7 @@ async def http_error(request: Request, exc: StarletteHTTPException):
 # Auth
 # --------------------------------------------------------------------------
 
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, error: Optional[str] = None, next: str = "/"):
     if settings.auth_disabled:
@@ -278,7 +292,9 @@ async def auth_google(request: Request, next: str = "/"):
         return RedirectResponse("/login?error=OAuth+is+not+configured", status_code=302)
     request.session["post_login_redirect"] = next or "/"
     redirect_uri = f"{settings.base_url.rstrip('/')}/auth/callback"
-    return await oauth.google.authorize_redirect(request, redirect_uri, **authorize_params())
+    return await oauth.google.authorize_redirect(
+        request, redirect_uri, **authorize_params()
+    )
 
 
 @app.get("/auth/callback")
@@ -286,11 +302,15 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
     try:
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as e:
-        return RedirectResponse(f"/login?error={e.description or e.error}", status_code=302)
+        return RedirectResponse(
+            f"/login?error={e.description or e.error}", status_code=302
+        )
 
     claims = token.get("userinfo") or {}
     if not claims:
-        resp = await oauth.google.get("https://openidconnect.googleapis.com/v1/userinfo", token=token)
+        resp = await oauth.google.get(
+            "https://openidconnect.googleapis.com/v1/userinfo", token=token
+        )
         claims = resp.json()
 
     try:
@@ -320,6 +340,7 @@ def logout(request: Request):
 # --------------------------------------------------------------------------
 # Spotkania
 # --------------------------------------------------------------------------
+
 
 def _parse_date(value: Optional[str]) -> Optional[dt.date]:
     if not value:
@@ -382,19 +403,23 @@ def meetings_view(
     f = _filters(q, status, participant, date_from, date_to, view, sort, page)
     rows, total = search_meetings(session, f)
     active_jobs = _active_jobs_by_meeting(session, [m.id for m in rows])
-    return render(request, "meetings.html", {
-        "meetings": rows,
-        "total": total,
-        "f": f,
-        "qbase": f.as_query_dict(),
-        "pages": max(1, math.ceil(total / f.per_page)),
-        "facets": status_facets(session, f),
-        "people": participant_facets(session),
-        "queue": queue_stats(session),
-        "active_jobs": active_jobs,
-        "last_sync": session.execute(select(func.max(Meeting.synced_at))).scalar(),
-        "untitled": untitled_count(session),
-    })
+    return render(
+        request,
+        "meetings.html",
+        {
+            "meetings": rows,
+            "total": total,
+            "f": f,
+            "qbase": f.as_query_dict(),
+            "pages": max(1, math.ceil(total / f.per_page)),
+            "facets": status_facets(session, f),
+            "people": participant_facets(session),
+            "queue": queue_stats(session),
+            "active_jobs": active_jobs,
+            "last_sync": session.execute(select(func.max(Meeting.synced_at))).scalar(),
+            "untitled": untitled_count(session),
+        },
+    )
 
 
 def _active_jobs_by_meeting(session: Session, meeting_ids: list[str]) -> dict[str, Job]:
@@ -421,9 +446,14 @@ def meeting_detail(
     meeting = session.get(Meeting, meeting_id)
     if meeting is None:
         raise HTTPException(404, "No such meeting")
-    jobs = list(session.execute(
-        select(Job).where(Job.meeting_id == meeting_id).order_by(desc(Job.id)).limit(20)
-    ).scalars())
+    jobs = list(
+        session.execute(
+            select(Job)
+            .where(Job.meeting_id == meeting_id)
+            .order_by(desc(Job.id))
+            .limit(20)
+        ).scalars()
+    )
     transcript = meeting.latest_transcript
     preview = []
     if transcript:
@@ -431,12 +461,16 @@ def meeting_detail(
             preview = tasks.parse_transcript(tasks.transcript_text(transcript))[:12]
         except FileNotFoundError:
             preview = []
-    return render(request, "meeting_detail.html", {
-        "m": meeting,
-        "jobs": jobs,
-        "transcript": transcript,
-        "preview": preview,
-    })
+    return render(
+        request,
+        "meeting_detail.html",
+        {
+            "m": meeting,
+            "jobs": jobs,
+            "transcript": transcript,
+            "preview": preview,
+        },
+    )
 
 
 @app.post("/meetings/{meeting_id}/enqueue")
@@ -493,6 +527,7 @@ def meetings_bulk(
 # Transkrypty
 # --------------------------------------------------------------------------
 
+
 @app.get("/transcripts", response_class=HTMLResponse)
 def transcripts_view(
     request: Request,
@@ -508,14 +543,18 @@ def transcripts_view(
 ):
     f = _filters(q, status, participant, date_from, date_to, sort, page)
     rows, total = transcript_rows(session, f)
-    return render(request, "transcripts.html", {
-        "rows": rows,
-        "total": total,
-        "f": f,
-        "qbase": f.as_query_dict(),
-        "pages": max(1, math.ceil(total / f.per_page)),
-        "people": participant_facets(session),
-    })
+    return render(
+        request,
+        "transcripts.html",
+        {
+            "rows": rows,
+            "total": total,
+            "f": f,
+            "qbase": f.as_query_dict(),
+            "pages": max(1, math.ceil(total / f.per_page)),
+            "people": participant_facets(session),
+        },
+    )
 
 
 def _get_transcript(session: Session, transcript_id: int) -> Transcript:
@@ -538,12 +577,16 @@ def transcript_view(
     except FileNotFoundError as e:
         raise HTTPException(410, str(e)) from e
     speakers = sorted({u["speaker"] for u in utterances})
-    return render(request, "transcript.html", {
-        "t": t,
-        "m": t.meeting,
-        "utterances": utterances,
-        "speakers": speakers,
-    })
+    return render(
+        request,
+        "transcript.html",
+        {
+            "t": t,
+            "m": t.meeting,
+            "utterances": utterances,
+            "speakers": speakers,
+        },
+    )
 
 
 @app.get("/transcripts/{transcript_id}/download")
@@ -560,8 +603,12 @@ def transcript_download(
     except FileNotFoundError as e:
         raise HTTPException(410, str(e)) from e
 
-    slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in (meeting.title or "meeting"))[:80]
-    when = meeting.occurred_at.strftime("%Y-%m-%d") if meeting.occurred_at else "no-date"
+    slug = "".join(
+        c if c.isalnum() or c in "-_" else "-" for c in (meeting.title or "meeting")
+    )[:80]
+    when = (
+        meeting.occurred_at.strftime("%Y-%m-%d") if meeting.occurred_at else "no-date"
+    )
     stem = f"{when}-{slug}".strip("-")
 
     if fmt == "txt":
@@ -573,27 +620,37 @@ def transcript_download(
         body = tasks.to_vtt(tasks.parse_transcript(text), t.duration_seconds)
         media, ext = "text/vtt; charset=utf-8", "vtt"
     elif fmt == "json":
-        body = json.dumps({
-            "meeting": {
-                "id": meeting.id,
-                "title": meeting.title,
-                "platform": meeting.platform,
-                "started_at": meeting.started_at.isoformat() if meeting.started_at else None,
-                "duration_seconds": meeting.duration_seconds,
-                "participants": [
-                    {"name": p.name, "email": p.email, "source": p.source,
-                     "speaking_seconds": p.speaking_seconds}
-                    for p in meeting.participants
-                ],
+        body = json.dumps(
+            {
+                "meeting": {
+                    "id": meeting.id,
+                    "title": meeting.title,
+                    "platform": meeting.platform,
+                    "started_at": meeting.started_at.isoformat()
+                    if meeting.started_at
+                    else None,
+                    "duration_seconds": meeting.duration_seconds,
+                    "participants": [
+                        {
+                            "name": p.name,
+                            "email": p.email,
+                            "source": p.source,
+                            "speaking_seconds": p.speaking_seconds,
+                        }
+                        for p in meeting.participants
+                    ],
+                },
+                "transcript": {
+                    "engine": t.engine,
+                    "language": t.language,
+                    "speakers": t.speakers,
+                    "stats": t.stats,
+                    "utterances": tasks.parse_transcript(text),
+                },
             },
-            "transcript": {
-                "engine": t.engine,
-                "language": t.language,
-                "speakers": t.speakers,
-                "stats": t.stats,
-                "utterances": tasks.parse_transcript(text),
-            },
-        }, ensure_ascii=False, indent=2)
+            ensure_ascii=False,
+            indent=2,
+        )
         media, ext = "application/json; charset=utf-8", "json"
     elif fmt == "raw":
         if not t.raw_path:
@@ -617,6 +674,7 @@ def transcript_download(
 # Kolejka
 # --------------------------------------------------------------------------
 
+
 @app.get("/jobs", response_class=HTMLResponse)
 def jobs_view(
     request: Request,
@@ -630,20 +688,29 @@ def jobs_view(
     if status:
         stmt = stmt.where(Job.status == status)
     total = session.execute(
-        select(func.count(Job.id)).where(Job.status == status) if status
+        select(func.count(Job.id)).where(Job.status == status)
+        if status
         else select(func.count(Job.id))
     ).scalar_one()
-    rows = list(session.execute(
-        stmt.order_by(desc(Job.id)).limit(per_page).offset((max(1, page) - 1) * per_page)
-    ).scalars())
-    return render(request, "jobs.html", {
-        "jobs": rows,
-        "queue": queue_stats(session),
-        "status": status,
-        "page": max(1, page),
-        "pages": max(1, math.ceil(total / per_page)),
-        "total": total,
-    })
+    rows = list(
+        session.execute(
+            stmt.order_by(desc(Job.id))
+            .limit(per_page)
+            .offset((max(1, page) - 1) * per_page)
+        ).scalars()
+    )
+    return render(
+        request,
+        "jobs.html",
+        {
+            "jobs": rows,
+            "queue": queue_stats(session),
+            "status": status,
+            "page": max(1, page),
+            "pages": max(1, math.ceil(total / per_page)),
+            "total": total,
+        },
+    )
 
 
 @app.post("/jobs/{job_id}/retry")
@@ -731,6 +798,7 @@ def trigger_backfill_titles(
 # JSON API (odświeżanie w tle + integracje)
 # --------------------------------------------------------------------------
 
+
 def _meeting_json(m: Meeting) -> dict[str, Any]:
     t = m.latest_transcript
     return {
@@ -744,7 +812,9 @@ def _meeting_json(m: Meeting) -> dict[str, Any]:
         "status_code": m.status_code,
         "asset_state": m.asset_state,
         "transcript_state": m.transcript_state,
-        "media_expires_at": m.media_expires_at.isoformat() if m.media_expires_at else None,
+        "media_expires_at": m.media_expires_at.isoformat()
+        if m.media_expires_at
+        else None,
         "participants": [
             {"name": p.name, "email": p.email, "source": p.source, "is_bot": p.is_bot}
             for p in m.participants

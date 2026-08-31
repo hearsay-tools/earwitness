@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-
 VALID_REGIONS = ("us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1")
 DEFAULT_REGION = "eu-central-1"
 
@@ -103,9 +102,7 @@ class RecallClient:
             url = f"{self.config.base_url}{path_or_url}"
         data = json.dumps(body or {}).encode("utf-8")
         headers = {**self._headers(), "Content-Type": "application/json"}
-        req = urllib.request.Request(
-            url, data=data, headers=headers, method="POST"
-        )
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read().decode("utf-8")
@@ -166,19 +163,24 @@ class RecallClient:
     # ---- audio artifacts (per-recording) ----
 
     def list_audio_mixed(self, recording_id: str) -> list[dict]:
-        return list(self._paginate(
-            "/audio_mixed/",
-            {"recording_id": recording_id, "status_code": "done"},
-        ))
+        return list(
+            self._paginate(
+                "/audio_mixed/",
+                {"recording_id": recording_id, "status_code": "done"},
+            )
+        )
 
     def list_audio_separate(self, recording_id: str) -> list[dict]:
-        return list(self._paginate(
-            "/audio_separate/",
-            {"recording_id": recording_id, "status_code": "done"},
-        ))
+        return list(
+            self._paginate(
+                "/audio_separate/",
+                {"recording_id": recording_id, "status_code": "done"},
+            )
+        )
 
 
 # ---------- asset collection + download ----------
+
 
 @dataclass
 class AudioMixedAsset:
@@ -278,27 +280,31 @@ def collect_bot_assets(
         # Audio mixed: najpierw shortcut, potem fallback do listy
         shortcut = (rec.get("media_shortcuts") or {}).get("audio_mixed")
         if shortcut and (shortcut.get("data") or {}).get("download_url"):
-            assets.audio_mixed.append(AudioMixedAsset(
-                artifact_id=shortcut["id"],
-                recording_id=rec_id,
-                fmt=shortcut.get("format") or "mp3",
-                download_url=shortcut["data"]["download_url"],
-            ))
+            assets.audio_mixed.append(
+                AudioMixedAsset(
+                    artifact_id=shortcut["id"],
+                    recording_id=rec_id,
+                    fmt=shortcut.get("format") or "mp3",
+                    download_url=shortcut["data"]["download_url"],
+                )
+            )
         else:
             for art in client.list_audio_mixed(rec_id):
-                url = ((art.get("data") or {}).get("download_url"))
+                url = (art.get("data") or {}).get("download_url")
                 if not url:
                     continue
-                assets.audio_mixed.append(AudioMixedAsset(
-                    artifact_id=art["id"],
-                    recording_id=rec_id,
-                    fmt=art.get("format") or "mp3",
-                    download_url=url,
-                ))
+                assets.audio_mixed.append(
+                    AudioMixedAsset(
+                        artifact_id=art["id"],
+                        recording_id=rec_id,
+                        fmt=art.get("format") or "mp3",
+                        download_url=url,
+                    )
+                )
 
         # Audio separate: zawsze przez dedykowany endpoint
         for art in client.list_audio_separate(rec_id):
-            url = ((art.get("data") or {}).get("download_url"))
+            url = (art.get("data") or {}).get("download_url")
             if not url:
                 continue
             # manifest_url to JSON z listą parts — każdy part ma swój download_url.
@@ -322,16 +328,18 @@ def collect_bot_assets(
             )
             for part in manifest:
                 p = part.get("participant") or {}
-                sep.parts.append(AudioSeparatePart(
-                    part_id=part.get("id", ""),
-                    participant_id=p.get("id"),
-                    participant_name=p.get("name"),
-                    start_relative=(part.get("start_timestamp") or {}).get(
-                        "relative", 0.0
-                    ),
-                    duration=part.get("duration") or 0.0,
-                    download_url=part.get("download_url") or "",
-                ))
+                sep.parts.append(
+                    AudioSeparatePart(
+                        part_id=part.get("id", ""),
+                        participant_id=p.get("id"),
+                        participant_name=p.get("name"),
+                        start_relative=(part.get("start_timestamp") or {}).get(
+                            "relative", 0.0
+                        ),
+                        duration=part.get("duration") or 0.0,
+                        download_url=part.get("download_url") or "",
+                    )
+                )
             assets.audio_separate.append(sep)
 
         # participant_events: speaker_timeline + participants + events (JSON-y).
@@ -341,9 +349,7 @@ def collect_bot_assets(
         ).get("data") or {}
         assets.speaker_timeline_url = pe_data.get("speaker_timeline_download_url")
         assets.participants_url = pe_data.get("participants_download_url")
-        assets.participant_events_url = pe_data.get(
-            "participant_events_download_url"
-        )
+        assets.participant_events_url = pe_data.get("participant_events_download_url")
 
         out.append(assets)
     return out
@@ -412,12 +418,12 @@ def download_bot_assets(
                 {
                     "id": a.artifact_id,
                     "format": a.fmt,
-                    "participants": sorted({
-                        f"{p.participant_id}:{p.participant_name}"
-                        for p in a.parts
-                    }),
+                    "participants": sorted(
+                        {f"{p.participant_id}:{p.participant_name}" for p in a.parts}
+                    ),
                     "parts": len(a.parts),
-                } for a in rec.audio_separate
+                }
+                for a in rec.audio_separate
             ],
             "participant_events": {
                 "speaker_timeline": bool(rec.speaker_timeline_url),
@@ -436,7 +442,8 @@ def download_bot_assets(
                 ext = "mp3" if art.fmt == "mp3" else "raw"
                 # Jeśli >1 mixed, dodaj suffix
                 name = (
-                    f"audio_mixed.{ext}" if len(rec.audio_mixed) == 1
+                    f"audio_mixed.{ext}"
+                    if len(rec.audio_mixed) == 1
                     else f"audio_mixed_{i}_{art.artifact_id[:8]}.{ext}"
                 )
                 dest = rec_dir / name
@@ -495,10 +502,7 @@ def download_bot_assets(
                         summary["separate_parts_downloaded"] += 1
                         summary["bytes"] += n
                     except Exception as e:
-                        err = (
-                            f"audio_separate part {part.part_id} "
-                            f"({p_label}): {e}"
-                        )
+                        err = f"audio_separate part {part.part_id} ({p_label}): {e}"
                         summary["errors"].append(err)
                         print(f"  ERROR: {err}", file=sys.stderr)
 

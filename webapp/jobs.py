@@ -64,7 +64,10 @@ def release_meeting_state(session: Session, job: Job, *, failed: bool) -> None:
     meeting = session.get(Meeting, job.meeting_id)
     if meeting is None:
         return
-    if job.kind in TRANSCRIPT_JOB_KINDS and meeting.transcript_state in _TRANSCRIPT_PENDING:
+    if (
+        job.kind in TRANSCRIPT_JOB_KINDS
+        and meeting.transcript_state in _TRANSCRIPT_PENDING
+    ):
         meeting.transcript_state = "failed" if failed else "none"
         if failed and not meeting.transcript_error:
             meeting.transcript_error = (job.error or "")[:2000] or None
@@ -72,6 +75,7 @@ def release_meeting_state(session: Session, job: Job, *, failed: bool) -> None:
     # tylko to, co nie zdążyło tam dojść (ubity worker, anulowanie w kolejce).
     if job.kind in ASSET_JOB_KINDS and meeting.asset_state in _ASSET_PENDING:
         meeting.asset_state = "failed" if failed else "none"
+
 
 # --------------------------------------------------------------------------
 # Rejestr tasków
@@ -110,8 +114,12 @@ class JobContext:
         self.args: dict[str, Any] = job.args or {}
         self.meeting_id = job.meeting_id
 
-    def progress(self, pct: Optional[int] = None, step: Optional[str] = None,
-                 line: Optional[str] = None) -> None:
+    def progress(
+        self,
+        pct: Optional[int] = None,
+        step: Optional[str] = None,
+        line: Optional[str] = None,
+    ) -> None:
         if pct is not None:
             self.job.progress = max(0, min(100, int(pct)))
         if step is not None:
@@ -134,6 +142,7 @@ class JobContext:
 # --------------------------------------------------------------------------
 # API kolejki
 # --------------------------------------------------------------------------
+
 
 def enqueue(
     session: Session,
@@ -177,7 +186,10 @@ def enqueue(
             # Cena: nie da się tak *wyłączyć* flagi na czekającym zadaniu —
             # i dobrze, bo UI takiej intencji nie ma, a priorytet niżej działa
             # dokładnie tak samo (tylko w stronę pilniejszego).
-            merged = {**(existing.args or {}), **{k: v for k, v in (args or {}).items() if v}}
+            merged = {
+                **(existing.args or {}),
+                **{k: v for k, v in (args or {}).items() if v},
+            }
             if merged != (existing.args or {}):
                 existing.args = merged
             if priority < existing.priority:
@@ -200,7 +212,9 @@ def enqueue(
     return job
 
 
-def claim(session: Session, worker_id: str, kinds: Optional[Iterable[str]] = None) -> Optional[Job]:
+def claim(
+    session: Session, worker_id: str, kinds: Optional[Iterable[str]] = None
+) -> Optional[Job]:
     """Atomowo zabierz jedno zadanie z kolejki. None gdy pusto.
 
     Compare-and-swap zamiast `FOR UPDATE SKIP LOCKED`, bo ma działać też na
@@ -256,7 +270,9 @@ def fail(session: Session, job: Job, error: str, allow_retry: bool = True) -> No
         backoff = 30 * (4 ** (job.attempts - 1))
         job.status = JOB_QUEUED
         job.scheduled_at = utcnow() + dt.timedelta(seconds=min(backoff, 1800))
-        job.step = f"retry {job.attempts}/{job.max_attempts} in {int(min(backoff, 1800))}s"
+        job.step = (
+            f"retry {job.attempts}/{job.max_attempts} in {int(min(backoff, 1800))}s"
+        )
         job.worker_id = None
     else:
         job.status = JOB_FAILED
@@ -280,16 +296,22 @@ def cancel(session: Session, job: Job) -> bool:
 def reap_stale(session: Session) -> int:
     """Zadania `running` bez heartbeatu → z powrotem do kolejki (albo fail)."""
     cutoff = utcnow() - dt.timedelta(seconds=settings.job_stale_after)
-    stale = list(session.execute(
-        select(Job).where(
-            Job.status == JOB_RUNNING,
-            Job.heartbeat_at.is_not(None),
-            Job.heartbeat_at < cutoff,
-        )
-    ).scalars())
+    stale = list(
+        session.execute(
+            select(Job).where(
+                Job.status == JOB_RUNNING,
+                Job.heartbeat_at.is_not(None),
+                Job.heartbeat_at < cutoff,
+            )
+        ).scalars()
+    )
     for job in stale:
         log.warning("job %s (%s) zawieszony — reaping", job.id, job.kind)
-        fail(session, job, f"The worker stopped responding (no heartbeat for > {settings.job_stale_after}s)")
+        fail(
+            session,
+            job,
+            f"The worker stopped responding (no heartbeat for > {settings.job_stale_after}s)",
+        )
     return len(stale)
 
 
@@ -316,16 +338,23 @@ def release_orphaned_meetings(session: Session) -> int:
     ).scalars():
         last = session.execute(
             select(Job)
-            .where(Job.meeting_id == meeting.id, Job.kind.in_(("process", "transcribe", "fetch_assets")))
+            .where(
+                Job.meeting_id == meeting.id,
+                Job.kind.in_(("process", "transcribe", "fetch_assets")),
+            )
             .order_by(Job.id.desc())
             .limit(1)
         ).scalar_one_or_none()
         if meeting.transcript_state in _TRANSCRIPT_PENDING:
-            meeting.transcript_state = "failed" if last and last.status == JOB_FAILED else "none"
+            meeting.transcript_state = (
+                "failed" if last and last.status == JOB_FAILED else "none"
+            )
             if meeting.transcript_state == "failed" and not meeting.transcript_error:
                 meeting.transcript_error = (last.error or "")[:2000] or None
         if meeting.asset_state in _ASSET_PENDING:
-            meeting.asset_state = "failed" if last and last.status == JOB_FAILED else "none"
+            meeting.asset_state = (
+                "failed" if last and last.status == JOB_FAILED else "none"
+            )
         freed += 1
     if freed:
         session.commit()
@@ -349,7 +378,9 @@ def run_job(session: Session, job: Job) -> None:
         )
         return
     ctx = JobContext(session, job)
-    ctx.progress(0, "start", f"start: {job.kind} (attempt {job.attempts}/{job.max_attempts})")
+    ctx.progress(
+        0, "start", f"start: {job.kind} (attempt {job.attempts}/{job.max_attempts})"
+    )
     try:
         result = fn(ctx) or {}
     except Exception as e:  # noqa: BLE001 — worker nie może paść przez jeden task
@@ -366,9 +397,12 @@ def run_job(session: Session, job: Job) -> None:
 # Statystyki do UI
 # --------------------------------------------------------------------------
 
+
 def queue_stats(session: Session) -> dict[str, int]:
     rows = session.execute(
-        select(Job.status, Job.id).where(Job.status.in_([JOB_QUEUED, JOB_RUNNING, JOB_FAILED]))
+        select(Job.status, Job.id).where(
+            Job.status.in_([JOB_QUEUED, JOB_RUNNING, JOB_FAILED])
+        )
     ).all()
     out = {JOB_QUEUED: 0, JOB_RUNNING: 0, JOB_FAILED: 0}
     for status, _ in rows:

@@ -154,9 +154,7 @@ def plan_apply(
     return {"add_labels": add_labels, "comment": comment, "close": closing}
 
 
-def build_prompt(
-    issue: dict, candidates: list[dict], open_issues: list[dict]
-) -> str:
+def build_prompt(issue: dict, candidates: list[dict], open_issues: list[dict]) -> str:
     label_lines = "\n".join(
         f"- {c['name']}: {c.get('description') or '(no description)'}"
         for c in candidates
@@ -166,8 +164,8 @@ def build_prompt(
         for i in open_issues
     )
     return f"""## New issue to triage
-#{issue['number']} {issue['title']}
-{truncate(issue.get('body') or '', 2000)}
+#{issue["number"]} {issue["title"]}
+{truncate(issue.get("body") or "", 2000)}
 
 ## Area labels (pick exactly one, by the boundary each description states)
 {label_lines or "(none)"}
@@ -205,9 +203,7 @@ def fetch_labels(client: httpx.Client, repo: str) -> list[dict]:
     labels: list[dict] = []
     page = 1
     while True:
-        batch = gh_get(
-            client, f"/repos/{repo}/labels", {"per_page": 100, "page": page}
-        )
+        batch = gh_get(client, f"/repos/{repo}/labels", {"per_page": 100, "page": page})
         labels.extend(batch)
         if len(batch) < 100 or len(labels) >= 500:
             return labels
@@ -265,7 +261,11 @@ def ask_codex(prompt: str, model: str) -> str:
 
 
 def run_model(
-    provider: str, prompt: str, model: str, candidate_names: list[str], open_numbers: set[int]
+    provider: str,
+    prompt: str,
+    model: str,
+    candidate_names: list[str],
+    open_numbers: set[int],
 ) -> dict:
     ask = ask_claude if provider == "claude" else ask_codex
     error: ValueError = ValueError("model did not return a usable verdict")
@@ -322,7 +322,9 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     client, args.repo, result["duplicate"]["number"]
                 )
             except httpx.HTTPError as exc:
-                print(f"::warning title=duplicate::cannot fetch duplicate target: {exc}")
+                print(
+                    f"::warning title=duplicate::cannot fetch duplicate target: {exc}"
+                )
         plan = plan_apply(
             result,
             trigger_number=args.issue,
@@ -334,7 +336,9 @@ def cmd_apply(args: argparse.Namespace) -> int:
             print(f"dry-run: would execute on #{args.issue}: {json.dumps(plan)}")
             return 0
         if plan["add_labels"]:
-            client.post(issue_path + "/labels", json={"labels": plan["add_labels"]}).raise_for_status()
+            client.post(
+                issue_path + "/labels", json={"labels": plan["add_labels"]}
+            ).raise_for_status()
         if plan["comment"]:
             client.post(
                 f"/repos/{args.repo}/issues/{args.issue}/comments",
@@ -354,7 +358,9 @@ def positive_int(value: str) -> int:
     try:
         number = int(value)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"issue number must be an integer: {value!r}") from None
+        raise argparse.ArgumentTypeError(
+            f"issue number must be an integer: {value!r}"
+        ) from None
     if number <= 0:
         raise argparse.ArgumentTypeError("issue number must be positive")
     return number
@@ -367,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--repo", default=env_default("GITHUB_REPOSITORY"))
     common.add_argument(
-        "--issue", default=env_default("ISSUE_NUMBER"),
+        "--issue",
+        default=env_default("ISSUE_NUMBER"),
         help="defaults to $ISSUE_NUMBER; every mutation targets this issue only",
     )
     common.add_argument(
@@ -376,7 +383,9 @@ def main(argv: list[str] | None = None) -> int:
 
     analyze = sub.add_parser("analyze", parents=[common])
     analyze.add_argument(
-        "--provider", choices=sorted(DEFAULT_MODELS), default=env_default("ISSUE_INTAKE_PROVIDER")
+        "--provider",
+        choices=sorted(DEFAULT_MODELS),
+        default=env_default("ISSUE_INTAKE_PROVIDER"),
     )
     analyze.add_argument("--model", default=env_default("ISSUE_INTAKE_MODEL"))
     analyze.add_argument("--result-path", default=RESULT_FILE)

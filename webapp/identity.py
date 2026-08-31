@@ -35,8 +35,20 @@ _PAREN = re.compile(r"\([^)]*\)")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 # Tytuły i dopiski, które nie są częścią nazwiska.
 _NOISE_TOKENS = {
-    "dr", "mgr", "inz", "inż", "prof", "phd", "mba",
-    "apptension", "guest", "gosc", "external", "ext", "iphone", "ipad",
+    "dr",
+    "mgr",
+    "inz",
+    "inż",
+    "prof",
+    "phd",
+    "mba",
+    "apptension",
+    "guest",
+    "gosc",
+    "external",
+    "ext",
+    "iphone",
+    "ipad",
 }
 
 
@@ -91,7 +103,7 @@ def score(name: Optional[str], email: Optional[str]) -> float:
                 elif len(e) == 1 and n.startswith(e):
                     hits.append(0.86)  # inicjał
                 elif len(e) >= 3 and n.startswith(e):
-                    hits.append(0.8)   # skrócone imię (kasia → katarzyna)
+                    hits.append(0.8)  # skrócone imię (kasia → katarzyna)
                 else:
                     hits.append(0.0)
             if all(hits):
@@ -105,18 +117,20 @@ def score(name: Optional[str], email: Optional[str]) -> float:
         if len(order) >= 2:
             head, tail = order[0], "".join(order[1:])
             if lp == head[0] + tail:
-                best = max(best, 0.95)      # jkowalski = j + kowalski
+                best = max(best, 0.95)  # jkowalski = j + kowalski
             if lp == head + tail[0]:
-                best = max(best, 0.84)      # jank
+                best = max(best, 0.84)  # jank
             if lp == "".join(t[0] for t in order):
-                best = max(best, 0.5)       # same inicjały — słabe
+                best = max(best, 0.5)  # same inicjały — słabe
 
     # --- zawieranie członu ---
     if best < 0.8:
         surname = nt[-1]
         if len(surname) >= 4 and surname in lp:
             # Nazwisko w adresie plus inicjał imienia gdziekolwiek indziej.
-            extra = 0.08 if len(nt) > 1 and nt[0][0] in lp.replace(surname, "", 1) else 0.0
+            extra = (
+                0.08 if len(nt) > 1 and nt[0][0] in lp.replace(surname, "", 1) else 0.0
+            )
             best = max(best, 0.74 + extra)
         for tok in nt[:-1]:
             if len(tok) >= 4 and tok in lp:
@@ -129,7 +143,7 @@ def score(name: Optional[str], email: Optional[str]) -> float:
 class Candidate:
     """Uczestnik z callu, dla którego szukamy adresu."""
 
-    ref: object          # cokolwiek — zwracamy to nietknięte
+    ref: object  # cokolwiek — zwracamy to nietknięte
     name: Optional[str]
 
 
@@ -196,6 +210,7 @@ def assign(
 # Podłączenie do modelu
 # --------------------------------------------------------------------------
 
+
 def propagate_known_emails(meetings) -> int:  # noqa: ANN001 — iterable[Meeting]
     """Przenieś powiązanie nazwa→adres, poznane w jednym spotkaniu, na pozostałe.
 
@@ -228,7 +243,8 @@ def propagate_known_emails(meetings) -> int:  # noqa: ANN001 — iterable[Meetin
     filled = 0
     for m in meetings:
         people = [
-            p for p in m.participants
+            p
+            for p in m.participants
             if not p.is_bot and not looks_like_bot(p.name, p.email)
         ]
         taken = {p.email.strip().lower() for p in people if p.email}
@@ -285,15 +301,17 @@ def match_globally(meetings) -> int:  # noqa: ANN001 — iterable[Meeting]
     filled = 0
     for m in meetings:
         people = [
-            p for p in m.participants
+            p
+            for p in m.participants
             if not p.is_bot and not looks_like_bot(p.name, p.email)
         ]
         taken = {p.email.strip().lower() for p in people if p.email}
         for p in people:
             if p.email or p.source != "recall" or not p.name:
                 continue
-            ranked = sorted(((score(p.name, e), e) for e in pool if e not in taken),
-                            reverse=True)
+            ranked = sorted(
+                ((score(p.name, e), e) for e in pool if e not in taken), reverse=True
+            )
             if not ranked or ranked[0][0] < GLOBAL_MIN:
                 continue
             top_score, top_email = ranked[0]
@@ -325,13 +343,15 @@ def resolve_meeting(meeting) -> dict[str, int]:  # noqa: ANN001 — webapp.model
     from webapp.models import looks_like_bot
 
     people = [
-        p for p in meeting.participants
+        p
+        for p in meeting.participants
         if not p.is_bot and not looks_like_bot(p.name, p.email)
     ]
     recall_rows = [p for p in people if p.source == "recall"]
     taken = {p.email.strip().lower() for p in recall_rows if p.email}
     pool = [
-        p.email for p in people
+        p.email
+        for p in people
         if p.source == "calendar" and p.email and p.email.strip().lower() not in taken
     ]
     todo = [Candidate(ref=p, name=p.name) for p in recall_rows if not p.email]

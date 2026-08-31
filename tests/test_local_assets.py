@@ -13,7 +13,6 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-
 from webapp.app import app
 from webapp.config import settings
 from webapp.models import Meeting, MeetingParticipant
@@ -41,25 +40,39 @@ def make_recording_dir(
     rec_dir = settings.recall_dir / bot_id / rec_id
     sep = rec_dir / "audio_separate" / "1-Ala"
     sep.mkdir(parents=True, exist_ok=True)
-    (rec_dir / "recording.json").write_text(json.dumps({
-        "recording_id": rec_id,
-        "bot_id": bot_id,
-        "expires_at": "2026-07-24T10:25:17.628636Z",
-        "started_at": "2026-07-10T09:28:13.149516Z",
-        "completed_at": "2026-07-10T10:25:17.628636Z",
-        "audio_mixed": [{"id": "aaaaaaaa-1111", "format": "mp3"}],
-        "audio_separate": [{"id": "bbbbbbbb-2222", "format": "raw", "parts": 1}],
-    }), encoding="utf-8")
+    (rec_dir / "recording.json").write_text(
+        json.dumps(
+            {
+                "recording_id": rec_id,
+                "bot_id": bot_id,
+                "expires_at": "2026-07-24T10:25:17.628636Z",
+                "started_at": "2026-07-10T09:28:13.149516Z",
+                "completed_at": "2026-07-10T10:25:17.628636Z",
+                "audio_mixed": [{"id": "aaaaaaaa-1111", "format": "mp3"}],
+                "audio_separate": [
+                    {"id": "bbbbbbbb-2222", "format": "raw", "parts": 1}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     (rec_dir / "audio_mixed.mp3").write_bytes(b"fake")
-    (rec_dir / "audio_separate" / "parts_bbbbbbbb.json").write_text("{}", encoding="utf-8")
+    (rec_dir / "audio_separate" / "parts_bbbbbbbb.json").write_text(
+        "{}", encoding="utf-8"
+    )
     (sep / "part-1.raw").write_bytes(b"fake")
-    (rec_dir / "participants.json").write_text(json.dumps([
-        {
-            "name": "Ala Kowalska",
-            "email": "akowalska@example.com" if with_email else None,
-            "is_host": True,
-        },
-    ]), encoding="utf-8")
+    (rec_dir / "participants.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "Ala Kowalska",
+                    "email": "akowalska@example.com" if with_email else None,
+                    "is_host": True,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture()
@@ -86,6 +99,7 @@ def expired_bot_payload(bot_id: str = BOT_ID) -> dict:
 # --------------------------------------------------------------------------
 # Wykrywanie na dysku
 # --------------------------------------------------------------------------
+
 
 def test_finds_recording_when_db_has_no_id(disk):
     make_recording_dir()
@@ -114,6 +128,7 @@ def test_bot_dir_with_only_bot_json_stays_none(disk):
 # Sync i backfill
 # --------------------------------------------------------------------------
 
+
 def test_sync_adopts_recording_from_disk(session, disk):
     make_recording_dir()
     meeting = upsert_bot(session, expired_bot_payload(), fetch_participants=False)
@@ -129,12 +144,14 @@ def test_sync_adopts_recording_from_disk(session, disk):
 
 
 def test_backfill_adopts_and_loads_participants(session, disk):
-    session.add(Meeting(
-        id=BOT_ID,
-        status_code="media_expired",
-        status_group="expired",
-        asset_state="expired",
-    ))
+    session.add(
+        Meeting(
+            id=BOT_ID,
+            status_code="media_expired",
+            status_group="expired",
+            asset_state="expired",
+        )
+    )
     session.commit()
     make_recording_dir()
 
@@ -162,9 +179,13 @@ def test_backfill_does_not_duplicate_people_from_calendar(session, disk):
         status_group="expired",
         asset_state="expired",
     )
-    m.participants.append(MeetingParticipant(
-        source="calendar", key="akowalska@example.com", email="akowalska@example.com",
-    ))
+    m.participants.append(
+        MeetingParticipant(
+            source="calendar",
+            key="akowalska@example.com",
+            email="akowalska@example.com",
+        )
+    )
     session.add(m)
     session.commit()
     make_recording_dir(with_email=False)  # z nagrania sama nazwa
@@ -172,8 +193,9 @@ def test_backfill_does_not_duplicate_people_from_calendar(session, disk):
     adopt_local_recordings(session)
 
     m = session.get(Meeting, BOT_ID)
-    assert {p.key for p in m.participants} == {"akowalska@example.com"}, \
+    assert {p.key for p in m.participants} == {"akowalska@example.com"}, (
         "nazwa z nagrania musi trafić na klucz adresowy, nie założyć drugiego"
+    )
     assert [p.display for p in m.human_participants] == ["Ala Kowalska"]
 
 
@@ -196,7 +218,9 @@ def test_sync_resolves_identities_when_people_appeared(session, monkeypatch):
 
     calls: list[str] = []
     monkeypatch.setattr(settings, "recall_api_key", "x")
-    monkeypatch.setattr(T, "sync_bots", lambda *a, **k: {"seen": 1, "created": 1, "updated": 0})
+    monkeypatch.setattr(
+        T, "sync_bots", lambda *a, **k: {"seen": 1, "created": 1, "updated": 0}
+    )
     monkeypatch.setattr(
         "webapp.recall_sync.resolve_identities",
         lambda s, m=None: calls.append("resolve") or {"matched": 0, "left": 0},
@@ -212,6 +236,7 @@ def test_sync_resolves_identities_when_people_appeared(session, monkeypatch):
 # --------------------------------------------------------------------------
 # Konsekwencje w kolejce i w UI
 # --------------------------------------------------------------------------
+
 
 def test_expired_bot_with_local_audio_is_processable(session, disk):
     make_recording_dir()
@@ -243,6 +268,7 @@ def test_detail_does_not_claim_recording_is_gone(session, disk):
 # Ponowienie po nieudanym pobraniu
 # --------------------------------------------------------------------------
 
+
 def test_retry_after_failed_fetch_redownloads(session, disk, monkeypatch):
     """Po porażce na dysku zostaje ogryzek pliku, a `download_bot_assets`
     domyślnie pomija to, co już istnieje — bez wymuszenia retry wracałby
@@ -250,8 +276,14 @@ def test_retry_after_failed_fetch_redownloads(session, disk, monkeypatch):
     from webapp import jobs as J
     from webapp import tasks
 
-    session.add(Meeting(id=BOT_ID, recording_id=REC_ID,
-                        asset_state="failed", asset_error="połowa pliku"))
+    session.add(
+        Meeting(
+            id=BOT_ID,
+            recording_id=REC_ID,
+            asset_state="failed",
+            asset_error="połowa pliku",
+        )
+    )
     session.commit()
 
     seen = {}

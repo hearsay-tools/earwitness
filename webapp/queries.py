@@ -54,11 +54,13 @@ def next_sort(column: str, current: str) -> str:
     primary, reverse = _SORT_PAIR[column]
     return reverse if current == primary else primary
 
+
 # Rangi statusu użytkownika budujemy z tego samego wyrażenia CASE co filtry
 # i fasetty — jedna para reguł, zero rozjazdu (patrz `user_status_case`).
 def _user_status_rank() -> Case:
     expr = user_status_case(utcnow())
     return case(*[(expr == s, i) for i, s in enumerate(USER_STATUS_ORDER)], else_=9)
+
 
 # Sortowanie po kolumnie „Transcript” zostaje — to informacja, nie filtr.
 _TRANSCRIPT_RANK: Case = case(
@@ -69,6 +71,7 @@ _TRANSCRIPT_RANK: Case = case(
     (Meeting.transcript_state == "failed", 4),
     else_=9,
 )
+
 
 @dataclass
 class MeetingFilters:
@@ -88,8 +91,11 @@ class MeetingFilters:
 
     def is_active(self) -> bool:
         return bool(
-            self.q or (self.statuses and not self.default_view) or self.participants
-            or self.date_from or self.date_to
+            self.q
+            or (self.statuses and not self.default_view)
+            or self.participants
+            or self.date_from
+            or self.date_to
         )
 
     def as_query_dict(self, **overrides: Any) -> dict[str, Any]:
@@ -163,13 +169,21 @@ def _order(stmt: Select, sort: str) -> Select:
     if sort == "title_desc":
         return stmt.order_by(func.lower(Meeting.title).desc(), Meeting.id)
     if sort == "status_asc":
-        return stmt.order_by(_user_status_rank().asc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(
+            _user_status_rank().asc(), OCCURRED.desc().nulls_last(), Meeting.id
+        )
     if sort == "status_desc":
-        return stmt.order_by(_user_status_rank().desc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(
+            _user_status_rank().desc(), OCCURRED.desc().nulls_last(), Meeting.id
+        )
     if sort == "transcript_asc":
-        return stmt.order_by(_TRANSCRIPT_RANK.asc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(
+            _TRANSCRIPT_RANK.asc(), OCCURRED.desc().nulls_last(), Meeting.id
+        )
     if sort == "transcript_desc":
-        return stmt.order_by(_TRANSCRIPT_RANK.desc(), OCCURRED.desc().nulls_last(), Meeting.id)
+        return stmt.order_by(
+            _TRANSCRIPT_RANK.desc(), OCCURRED.desc().nulls_last(), Meeting.id
+        )
     return stmt.order_by(OCCURRED.desc().nulls_last(), Meeting.id)
 
 
@@ -178,7 +192,9 @@ def search_meetings(session: Session, f: MeetingFilters) -> tuple[list[Meeting],
     total = session.execute(
         apply_filters(select(func.count(Meeting.id)), f)
     ).scalar_one()
-    stmt = _order(base, f.sort).limit(f.per_page).offset((max(1, f.page) - 1) * f.per_page)
+    stmt = (
+        _order(base, f.sort).limit(f.per_page).offset((max(1, f.page) - 1) * f.per_page)
+    )
     return list(session.execute(stmt).scalars().unique()), int(total)
 
 
@@ -197,15 +213,17 @@ def status_facets(session: Session, f: MeetingFilters) -> dict[str, int]:
 
 def untitled_count(session: Session) -> int:
     """Ile spotkań siedzi na tytule zastępczym zamiast tego z kalendarza."""
-    return int(session.execute(
-        select(func.count(Meeting.id)).where(
-            Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None),
-            or_(
-                Meeting.calendar_event_id.is_(None),
-                Meeting.title_source.is_distinct_from("calendar"),
-            ),
-        )
-    ).scalar_one())
+    return int(
+        session.execute(
+            select(func.count(Meeting.id)).where(
+                Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None),
+                or_(
+                    Meeting.calendar_event_id.is_(None),
+                    Meeting.title_source.is_distinct_from("calendar"),
+                ),
+            )
+        ).scalar_one()
+    )
 
 
 def participant_facets(session: Session, limit: int = 200) -> list[dict[str, Any]]:
@@ -234,15 +252,17 @@ def participant_facets(session: Session, limit: int = 200) -> list[dict[str, Any
     for key, name, email, n in rows:
         if looks_like_bot(name, email) or looks_like_bot(None, key):
             continue
-        out.append({
-            "key": key,
-            "label": name or email or key,
-            "email": email,
-            # Wpis bez nazwy pochodzi wyłącznie z kalendarza — ktoś, kogo
-            # zaproszono, ale kto nigdy nie pojawił się w żadnym nagraniu.
-            "email_only": not name,
-            "count": int(n),
-        })
+        out.append(
+            {
+                "key": key,
+                "label": name or email or key,
+                "email": email,
+                # Wpis bez nazwy pochodzi wyłącznie z kalendarza — ktoś, kogo
+                # zaproszono, ale kto nigdy nie pojawił się w żadnym nagraniu.
+                "email_only": not name,
+                "count": int(n),
+            }
+        )
     out.sort(key=lambda r: (-r["count"], r["label"].lower()))
     return out
 
@@ -251,14 +271,21 @@ def transcript_rows(
     session: Session, f: MeetingFilters
 ) -> tuple[list[tuple[Transcript, Meeting]], int]:
     """Widok „Transkrypty” — te same filtry, ale zwracamy pary (transkrypt, spotkanie)."""
-    joined = select(Transcript, Meeting).join(Meeting, Transcript.meeting_id == Meeting.id)
+    joined = select(Transcript, Meeting).join(
+        Meeting, Transcript.meeting_id == Meeting.id
+    )
     stmt = apply_filters(joined, f)
     total = session.execute(
         apply_filters(
-            select(func.count(Transcript.id)).join(Meeting, Transcript.meeting_id == Meeting.id), f
+            select(func.count(Transcript.id)).join(
+                Meeting, Transcript.meeting_id == Meeting.id
+            ),
+            f,
         )
     ).scalar_one()
-    stmt = stmt.order_by(Transcript.created_at.desc()).limit(f.per_page).offset(
-        (max(1, f.page) - 1) * f.per_page
+    stmt = (
+        stmt.order_by(Transcript.created_at.desc())
+        .limit(f.per_page)
+        .offset((max(1, f.page) - 1) * f.per_page)
     )
     return [(t, m) for t, m in session.execute(stmt).all()], int(total)
