@@ -1,0 +1,44 @@
+name: Task
+description: A unit of work with context and a verifiable definition of done
+title: "[Task]: "
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / Why
+      description: What prompted this? What breaks or stays painful if we skip it?
+      placeholder: The background someone needs to pick this up without asking around.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs to be done
+      description: The concrete change, in terms of behavior or artifacts.
+      placeholder: What exists (or works differently) once this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: A checklist someone else could verify without asking you.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Related links
+      description: Issues, PRs, docs, threads.
+    validations:
+      required: false
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Explicitly not part of this task.
+    validations:
+      required: false
