@@ -20,7 +20,7 @@ import httpx
 
 AREA_LABELS = ("pipeline", "recall", "webapp", "infra", "docs", "process")
 DUPLICATE_LABEL = "duplicate"
-DEFAULT_MODELS = {"claude": "claude-sonnet-4-5", "codex": "gpt-4o"}
+DEFAULT_MODELS = {"claude": "claude-sonnet-4-5", "codex": "gpt-5.6-luna"}
 MAX_OPEN_ISSUES = 200
 RESULT_FILE = "intake-result.json"
 
@@ -252,6 +252,7 @@ def ask_codex(prompt: str, model: str) -> str:
     completion = OpenAI().chat.completions.create(
         model=model,
         response_format={"type": "json_object"},
+        reasoning_effort="medium",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
