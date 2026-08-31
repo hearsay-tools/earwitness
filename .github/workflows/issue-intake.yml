@@ -1,0 +1,91 @@
+name: issue-intake
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    env:
+      ISSUE_INTAKE_PROVIDER: ${{ vars.ISSUE_INTAKE_PROVIDER }}
+    steps:
+      - name: Validate ISSUE_INTAKE_PROVIDER
+        run: |
+          case "$ISSUE_INTAKE_PROVIDER" in
+            claude|codex)
+              echo "provider=$ISSUE_INTAKE_PROVIDER"
+              ;;
+            "")
+              echo "::error title=ISSUE_INTAKE_PROVIDER::repository variable ISSUE_INTAKE_PROVIDER is not set (expected claude or codex)"
+              exit 1
+              ;;
+            *)
+              echo "::error title=ISSUE_INTAKE_PROVIDER::unsupported ISSUE_INTAKE_PROVIDER '$ISSUE_INTAKE_PROVIDER' (expected claude or codex)"
+              exit 1
+              ;;
+          esac
+
+  analyze:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [claude, codex]
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Analyze issue (claude)
+        if: matrix.provider == 'claude' && vars.ISSUE_INTAKE_PROVIDER == 'claude'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --no-project --with httpx --with anthropic scripts/issue_intake.py analyze --provider claude
+
+      - name: Analyze issue (codex)
+        if: matrix.provider == 'codex' && vars.ISSUE_INTAKE_PROVIDER == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run --no-project --with httpx --with openai scripts/issue_intake.py analyze --provider codex
+
+      - name: Upload result
+        if: matrix.provider == vars.ISSUE_INTAKE_PROVIDER
+        uses: actions/upload-artifact@v4
+        with:
+          name: intake-result
+          path: intake-result.json
+          if-no-files-found: error
+
+  apply:
+    needs: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Download result
+        uses: actions/download-artifact@v4
+        with:
+          name: intake-result
+
+      - name: Apply triage
+        run: uv run --no-project --with httpx scripts/issue_intake.py apply
