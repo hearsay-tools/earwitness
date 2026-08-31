@@ -21,8 +21,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from webapp.config import settings
-from webapp.models import Meeting, User, looks_like_bot, utcnow
 from webapp.identity import resolve_meeting
+from webapp.models import Meeting, User, looks_like_bot, utcnow
 from webapp.recall_sync import (
     _replace_participants,
     parse_ts,
@@ -77,7 +77,9 @@ def ensure_access_token(session: Session, user: User) -> str:
         timeout=30,
     )
     if resp.status_code != 200:
-        raise CalendarError(f"Token refresh failed ({resp.status_code}): {resp.text[:300]}")
+        raise CalendarError(
+            f"Token refresh failed ({resp.status_code}): {resp.text[:300]}"
+        )
     payload = resp.json()
     user.google_access_token = payload["access_token"]
     user.google_token_expires_at = utcnow() + dt.timedelta(
@@ -118,7 +120,9 @@ def list_events(
                     "calendar.readonly scope was granted."
                 )
             if resp.status_code != 200:
-                raise CalendarError(f"Calendar API {resp.status_code}: {resp.text[:300]}")
+                raise CalendarError(
+                    f"Calendar API {resp.status_code}: {resp.text[:300]}"
+                )
             data = resp.json()
             out.extend(data.get("items") or [])
             page_token = data.get("nextPageToken")
@@ -131,11 +135,15 @@ def list_events(
 # Dopasowanie event ↔ meeting
 # --------------------------------------------------------------------------
 
+
 def conference_ids(event: dict[str, Any]) -> set[str]:
     """Wyciąga identyfikatory konferencji z eventu (Meet code, Zoom id)."""
     ids: set[str] = set()
-    blobs = [event.get("hangoutLink") or "", event.get("location") or "",
-             event.get("description") or ""]
+    blobs = [
+        event.get("hangoutLink") or "",
+        event.get("location") or "",
+        event.get("description") or "",
+    ]
     conf = event.get("conferenceData") or {}
     for ep in conf.get("entryPoints") or []:
         blobs.append(ep.get("uri") or "")
@@ -149,7 +157,9 @@ def conference_ids(event: dict[str, Any]) -> set[str]:
     return {i for i in ids if i}
 
 
-def _event_window(event: dict[str, Any]) -> tuple[Optional[dt.datetime], Optional[dt.datetime]]:
+def _event_window(
+    event: dict[str, Any],
+) -> tuple[Optional[dt.datetime], Optional[dt.datetime]]:
     def _p(node: Optional[dict]) -> Optional[dt.datetime]:
         if not node:
             return None
@@ -168,25 +178,29 @@ def _attendee_rows(event: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     organizer = event.get("organizer") or {}
     if organizer.get("email") and not organizer.get("self", False):
-        rows.append({
-            "name": organizer.get("displayName"),
-            "email": organizer.get("email"),
-            "is_host": True,
-            "is_bot": False,
-            "response_status": "organizer",
-        })
+        rows.append(
+            {
+                "name": organizer.get("displayName"),
+                "email": organizer.get("email"),
+                "is_host": True,
+                "is_bot": False,
+                "response_status": "organizer",
+            }
+        )
     for a in event.get("attendees") or []:
         if a.get("resource"):
             continue  # sale konferencyjne
         name = a.get("displayName")
-        rows.append({
-            "name": name,
-            "email": a.get("email"),
-            "is_host": bool(a.get("organizer")),
-            "is_bot": looks_like_bot(name, a.get("email"))
-            or bool((a.get("email") or "").endswith(".calendar.google.com")),
-            "response_status": a.get("responseStatus"),
-        })
+        rows.append(
+            {
+                "name": name,
+                "email": a.get("email"),
+                "is_host": bool(a.get("organizer")),
+                "is_bot": looks_like_bot(name, a.get("email"))
+                or bool((a.get("email") or "").endswith(".calendar.google.com")),
+                "response_status": a.get("responseStatus"),
+            }
+        )
     return rows
 
 
@@ -205,10 +219,16 @@ def has_conference(event: dict[str, Any]) -> bool:
     if conf.get("entryPoints") or conf.get("conferenceId"):
         return True
     blob = f"{event.get('location') or ''} {event.get('description') or ''}"
-    return bool(_MEET_RE.search(blob) or _ZOOM_RE.search(blob) or "teams.microsoft.com" in blob.lower())
+    return bool(
+        _MEET_RE.search(blob)
+        or _ZOOM_RE.search(blob)
+        or "teams.microsoft.com" in blob.lower()
+    )
 
 
-def match_event(meeting: Meeting, events_by_conf: dict[str, dict], events: Iterable[dict]) -> Optional[dict]:
+def match_event(
+    meeting: Meeting, events_by_conf: dict[str, dict], events: Iterable[dict]
+) -> Optional[dict]:
     native = (meeting.meeting_native_id or "").replace("-", "").lower()
     if native and native in events_by_conf:
         return events_by_conf[native]
@@ -236,18 +256,22 @@ def match_event(meeting: Meeting, events_by_conf: dict[str, dict], events: Itera
 
 def meetings_without_calendar_title(session: Session) -> list[Meeting]:
     """Spotkania, którym kalendarz nigdy nie dołożył tytułu."""
-    return list(session.execute(
-        select(Meeting).where(
-            Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None),
-            or_(
-                Meeting.calendar_event_id.is_(None),
-                Meeting.title_source.is_distinct_from("calendar"),
-            ),
-        )
-    ).scalars())
+    return list(
+        session.execute(
+            select(Meeting).where(
+                Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None),
+                or_(
+                    Meeting.calendar_event_id.is_(None),
+                    Meeting.title_source.is_distinct_from("calendar"),
+                ),
+            )
+        ).scalars()
+    )
 
 
-def _backfill_window(meetings: Iterable[Meeting]) -> Optional[tuple[dt.datetime, dt.datetime]]:
+def _backfill_window(
+    meetings: Iterable[Meeting],
+) -> Optional[tuple[dt.datetime, dt.datetime]]:
     """Okno zapytania obejmujące podane spotkania, przycięte do rozsądku."""
     stamps = sorted(m.occurred_at for m in meetings if m.occurred_at)
     if not stamps:
@@ -299,18 +323,24 @@ def enrich_meetings(
         meetings = meetings_without_calendar_title(session)
         window = _backfill_window(meetings)
         if window is None:
-            return {"events": 0, "matched": 0, "linked_participants": 0,
-                    "meetings_scanned": 0}
+            return {
+                "events": 0,
+                "matched": 0,
+                "linked_participants": 0,
+                "meetings_scanned": 0,
+            }
         time_min, time_max = window
     else:
         now = utcnow()
         time_min = now - dt.timedelta(days=lookback_days)
         time_max = now + dt.timedelta(days=lookahead_days)
-        meetings = list(session.execute(
-            select(Meeting).where(
-                Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None)
-            )
-        ).scalars())
+        meetings = list(
+            session.execute(
+                select(Meeting).where(
+                    Meeting.join_at.is_not(None) | Meeting.started_at.is_not(None)
+                )
+            ).scalars()
+        )
 
     if on_progress:
         on_progress(

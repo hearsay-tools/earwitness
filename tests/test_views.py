@@ -11,9 +11,7 @@ import datetime as dt
 
 import pytest
 from fastapi.testclient import TestClient
-
-from webapp import labels
-from webapp import tasks
+from webapp import labels, tasks
 from webapp.app import app
 from webapp.config import settings
 from webapp.models import Job, Meeting, Transcript
@@ -48,11 +46,15 @@ def meeting(session):
 # Stany puste — każdy musi dawać drogę dalej
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("url,cta", [
-    ("/meetings", "/sync"),
-    ("/transcripts", "/meetings"),
-    ("/jobs", "/meetings"),
-])
+
+@pytest.mark.parametrize(
+    "url,cta",
+    [
+        ("/meetings", "/sync"),
+        ("/transcripts", "/meetings"),
+        ("/jobs", "/meetings"),
+    ],
+)
 def test_empty_states_offer_a_way_out(client, url, cta):
     r = client.get(url, headers=HTML)
     assert r.status_code == 200
@@ -69,6 +71,7 @@ def test_filtered_empty_state_offers_clearing_filters(client):
 # --------------------------------------------------------------------------
 # Błędy
 # --------------------------------------------------------------------------
+
 
 def test_html_404_is_branded_not_raw_json(client):
     r = client.get("/meetings/nie-ma-takiego", headers=HTML)
@@ -88,8 +91,11 @@ def test_api_404_stays_json(client):
 # Język interfejsu
 # --------------------------------------------------------------------------
 
+
 def test_job_kinds_are_translated_in_ui(client, session, meeting):
-    session.add(Job(kind="fetch_assets", status="done", meeting_id=meeting.id, progress=100))
+    session.add(
+        Job(kind="fetch_assets", status="done", meeting_id=meeting.id, progress=100)
+    )
     session.add(Job(kind="process", status="queued", meeting_id=meeting.id))
     session.commit()
 
@@ -136,14 +142,39 @@ def test_status_hint_explains_recall_sub_codes():
 # Akcje na spotkaniu: jedna intencja = jeden przycisk
 # --------------------------------------------------------------------------
 
+
 def _seed_axis(session):
     when = dt.datetime(2026, 8, 1, 10, 0, tzinfo=dt.timezone.utc)
-    session.add(Meeting(id="bot-up", title="Planned", status_group="scheduled",
-                        transcript_state="none", asset_state="none", started_at=when))
-    session.add(Meeting(id="bot-none", title="Empty", status_group="done",
-                        transcript_state="none", asset_state="none", started_at=when))
-    session.add(Meeting(id="bot-ok", title="Done deal", status_group="done",
-                        transcript_state="ready", asset_state="ready", started_at=when))
+    session.add(
+        Meeting(
+            id="bot-up",
+            title="Planned",
+            status_group="scheduled",
+            transcript_state="none",
+            asset_state="none",
+            started_at=when,
+        )
+    )
+    session.add(
+        Meeting(
+            id="bot-none",
+            title="Empty",
+            status_group="done",
+            transcript_state="none",
+            asset_state="none",
+            started_at=when,
+        )
+    )
+    session.add(
+        Meeting(
+            id="bot-ok",
+            title="Done deal",
+            status_group="done",
+            transcript_state="ready",
+            asset_state="ready",
+            started_at=when,
+        )
+    )
     session.commit()
 
 
@@ -190,8 +221,15 @@ def test_view_toggle_switches_between_finished_and_all(client, session, meeting)
 
 
 def test_finished_empty_state_explains_itself(client, session):
-    session.add(Meeting(id="bot-up", title="Planned", status_group="scheduled",
-                        transcript_state="none", asset_state="none"))
+    session.add(
+        Meeting(
+            id="bot-up",
+            title="Planned",
+            status_group="scheduled",
+            transcript_state="none",
+            asset_state="none",
+        )
+    )
     session.commit()
     html = client.get("/meetings", headers=HTML).text
     assert "No finished meetings yet" in html
@@ -218,7 +256,9 @@ def test_redo_forces_asr_behind_a_confirmation(client, session, meeting):
     assert "Redo transcript" in r.text
     assert 'name="force_asr" value="true"' in r.text
     assert 'data-confirm="redo-confirm"' in r.text and 'id="redo-confirm"' in r.text
-    assert "data-confirm-ok" in r.text, "bez przycisku OK dialog nie ma czym potwierdzić"
+    assert "data-confirm-ok" in r.text, (
+        "bez przycisku OK dialog nie ma czym potwierdzić"
+    )
     assert "30m 00s" in r.text, "koszt ma być konkretny, nie ogólne ostrzeżenie"
 
 
@@ -234,6 +274,7 @@ def test_meeting_without_recording_offers_nothing_to_run(client, session, meetin
 # Mobile: kolumny tabeli muszą nieść własne etykiety
 # --------------------------------------------------------------------------
 
+
 def test_table_cells_carry_labels_for_card_layout(client, session, meeting):
     r = client.get("/meetings", headers=HTML)
     for label in ("Meeting", "When", "Participants", "Status", "Transcript"):
@@ -244,20 +285,25 @@ def test_table_cells_carry_labels_for_card_layout(client, session, meeting):
 # Postęp i polling
 # --------------------------------------------------------------------------
 
+
 def test_only_active_jobs_are_marked_for_polling(client, session, meeting):
     session.add(Job(kind="process", status="done", meeting_id=meeting.id, progress=100))
     session.commit()
     r = client.get("/jobs", headers=HTML)
     assert "data-job-active" not in r.text, "zakończone zadanie nie może być pollowane"
 
-    session.add(Job(kind="transcribe", status="running", meeting_id=meeting.id, progress=40))
+    session.add(
+        Job(kind="transcribe", status="running", meeting_id=meeting.id, progress=40)
+    )
     session.commit()
     r = client.get("/jobs", headers=HTML)
     assert "data-job-active" in r.text
 
 
 def test_progress_bar_is_accessible(client, session, meeting):
-    session.add(Job(kind="process", status="running", meeting_id=meeting.id, progress=42))
+    session.add(
+        Job(kind="process", status="running", meeting_id=meeting.id, progress=42)
+    )
     session.commit()
     r = client.get("/jobs", headers=HTML)
     assert 'role="progressbar"' in r.text
@@ -266,7 +312,9 @@ def test_progress_bar_is_accessible(client, session, meeting):
 
 
 def test_api_jobs_expose_human_labels(client, session, meeting):
-    session.add(Job(kind="process", status="running", meeting_id=meeting.id, progress=10))
+    session.add(
+        Job(kind="process", status="running", meeting_id=meeting.id, progress=10)
+    )
     session.commit()
     data = client.get("/api/jobs").json()
     item = data["items"][0]
@@ -278,12 +326,17 @@ def test_api_jobs_expose_human_labels(client, session, meeting):
 # Transkrypt: pobieranie i stan „w toku”
 # --------------------------------------------------------------------------
 
+
 def test_transcript_offers_every_export_format(client, session, meeting, tmp_path):
     path = tmp_path / "t.txt"
     path.write_text("Jan Kowalski [00:00:01] Cześć.\n", encoding="utf-8")
     t = Transcript(
-        meeting_id=meeting.id, text_path=str(path), utterance_count=1,
-        word_count=1, duration_seconds=2, speakers=[{"name": "Jan Kowalski", "seconds": 2}],
+        meeting_id=meeting.id,
+        text_path=str(path),
+        utterance_count=1,
+        word_count=1,
+        duration_seconds=2,
+        speakers=[{"name": "Jan Kowalski", "seconds": 2}],
     )
     session.add(t)
     session.commit()
@@ -308,7 +361,9 @@ def test_transcript_text_resolves_relative_path(meeting):
 
 def test_running_transcription_shows_skeleton_not_blank(client, session, meeting):
     meeting.transcript_state = "running"
-    session.add(Job(kind="process", status="running", meeting_id=meeting.id, progress=55))
+    session.add(
+        Job(kind="process", status="running", meeting_id=meeting.id, progress=55)
+    )
     session.commit()
     r = client.get(f"/meetings/{meeting.id}", headers=HTML)
     assert 'aria-busy="true"' in r.text
@@ -327,6 +382,7 @@ def test_expired_media_is_explained(client, session, meeting):
 # --------------------------------------------------------------------------
 # Dostępność prezentacji
 # --------------------------------------------------------------------------
+
 
 def test_pages_have_skip_link_and_landmark(client):
     r = client.get("/meetings", headers=HTML)

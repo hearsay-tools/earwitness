@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from webapp.identity import Candidate, assign, fold, name_tokens, score
 
 
@@ -18,32 +17,38 @@ def test_name_tokens_drops_parenthetical_suffix():
     assert name_tokens("Jan Kowalski") == ["jan", "kowalski"]
 
 
-@pytest.mark.parametrize("name,email", [
-    ("Jan Kowalski", "jkowalski@acme.com"),
-    ("Paweł Świątek", "pswiatek@acme.com"),
-    ("Michał Nowak", "mnowak@acme.com"),
-    ("Tomasz Wójcik", "twojcik@acme.com"),
-    ("Marek Zieliński", "mzielinski@acme.com"),
-    ("Anna Nowak", "anowak@acme.com"),
-    ("Łukasz Dąbrowski", "ldabrowski@acme.com"),
-    ("Ewa Szymańska", "eszymanska@acme.com"),
-    ("Nowak Kamil", "k.nowak@client.pl"),
-    ("Kowalska Jolanta", "j.kowalska@client.pl"),
-    ("Costa Maria", "maria.costa@partner.gr"),
-    ("Ewa Nowicka", "ewa.nowicka@gmail.com"),
-    ("Jan Kowalski (Guest)", "jkowalski@acme.com"),
-])
+@pytest.mark.parametrize(
+    "name,email",
+    [
+        ("Jan Kowalski", "jkowalski@acme.com"),
+        ("Paweł Świątek", "pswiatek@acme.com"),
+        ("Michał Nowak", "mnowak@acme.com"),
+        ("Tomasz Wójcik", "twojcik@acme.com"),
+        ("Marek Zieliński", "mzielinski@acme.com"),
+        ("Anna Nowak", "anowak@acme.com"),
+        ("Łukasz Dąbrowski", "ldabrowski@acme.com"),
+        ("Ewa Szymańska", "eszymanska@acme.com"),
+        ("Nowak Kamil", "k.nowak@client.pl"),
+        ("Kowalska Jolanta", "j.kowalska@client.pl"),
+        ("Costa Maria", "maria.costa@partner.gr"),
+        ("Ewa Nowicka", "ewa.nowicka@gmail.com"),
+        ("Jan Kowalski (Guest)", "jkowalski@acme.com"),
+    ],
+)
 def test_real_pairs_score_high(name, email):
     assert score(name, email) >= 0.8, f"{name} ↔ {email} = {score(name, email)}"
 
 
-@pytest.mark.parametrize("name,email", [
-    ("Jan Kowalski", "anowak@acme.com"),
-    ("Paweł Świątek", "mnowak@acme.com"),
-    ("Marek Zieliński", "jkowalski@acme.com"),
-    ("Anna Nowak", "fred@fireflies.ai"),
-    ("Ewa Nowicka", "eszymanska@acme.com"),
-])
+@pytest.mark.parametrize(
+    "name,email",
+    [
+        ("Jan Kowalski", "anowak@acme.com"),
+        ("Paweł Świątek", "mnowak@acme.com"),
+        ("Marek Zieliński", "jkowalski@acme.com"),
+        ("Anna Nowak", "fred@fireflies.ai"),
+        ("Ewa Nowicka", "eszymanska@acme.com"),
+    ],
+)
 def test_wrong_pairs_score_low(name, email):
     assert score(name, email) < 0.62, f"{name} ↔ {email} = {score(name, email)}"
 
@@ -108,8 +113,9 @@ def test_empty_inputs_are_safe():
 
 
 def test_nameless_participant_is_skipped():
-    m, un, _ = assign([Candidate("a", None), Candidate("b", "Jan Kowalski")],
-                      ["jkowalski@acme.com"])
+    m, un, _ = assign(
+        [Candidate("a", None), Candidate("b", "Jan Kowalski")], ["jkowalski@acme.com"]
+    )
     assert [x.ref for x in m] == ["b"]
     assert [c.ref for c in un] == ["a"]
 
@@ -126,6 +132,7 @@ def test_bot_email_does_not_win_a_human():
 # Propagacja między spotkaniami — i dlaczego NIE robimy wnioskowania
 # przez wykluczenie.
 # --------------------------------------------------------------------------
+
 
 class _P:
     """Atrapa MeetingParticipant — wystarczy do logiki propagacji."""
@@ -197,10 +204,14 @@ def test_global_match_finds_address_from_another_meeting():
     """Zaproszony na jedno spotkanie, przyszedł na inne."""
     from webapp.identity import match_globally
 
-    frontend = _M(_P("calendar", None, "kwrobel@acme.com"),
-                  _P("calendar", None, "ldabrowski@acme.com"))
-    backend = _M(_P("recall", "Karol Wróbel"),
-                 _P("recall", "Łukasz Dąbrowski", "ldabrowski@acme.com"))
+    frontend = _M(
+        _P("calendar", None, "kwrobel@acme.com"),
+        _P("calendar", None, "ldabrowski@acme.com"),
+    )
+    backend = _M(
+        _P("recall", "Karol Wróbel"),
+        _P("recall", "Łukasz Dąbrowski", "ldabrowski@acme.com"),
+    )
     assert match_globally([frontend, backend]) == 1
     p = backend.participants[0]
     assert p.email == "kwrobel@acme.com"
@@ -212,8 +223,10 @@ def test_global_match_refuses_company_account():
     """Konto firmowe nie pasuje do niczego — zostaje bez adresu."""
     from webapp.identity import match_globally
 
-    a = _M(_P("calendar", None, "ela.nowak-kowalska@vendor.com"),
-           _P("calendar", None, "mzielinski@acme.com"))
+    a = _M(
+        _P("calendar", None, "ela.nowak-kowalska@vendor.com"),
+        _P("calendar", None, "mzielinski@acme.com"),
+    )
     b = _M(_P("recall", "Acme Publishing"))
     assert match_globally([a, b]) == 0
     assert b.participants[0].email is None
@@ -232,6 +245,7 @@ def test_global_match_skips_address_taken_in_that_meeting():
     from webapp.identity import match_globally
 
     a = _M(_P("calendar", None, "kwrobel@acme.com"))
-    b = _M(_P("recall", "Karol Wróbel"),
-           _P("calendar", "Ktoś Inny", "kwrobel@acme.com"))
+    b = _M(
+        _P("recall", "Karol Wróbel"), _P("calendar", "Ktoś Inny", "kwrobel@acme.com")
+    )
     assert match_globally([a, b]) == 0

@@ -41,6 +41,7 @@ def parse_timestamp(s: str) -> float:
 
 # ---------- loaders ----------
 
+
 def load_ground_truth(timeline_path: Path) -> list[Utterance]:
     raw = json.loads(timeline_path.read_text())
     out: list[Utterance] = []
@@ -48,11 +49,13 @@ def load_ground_truth(timeline_path: Path) -> list[Utterance]:
         p = ev.get("participant") or {}
         start = (ev.get("start_timestamp") or {}).get("relative") or 0.0
         end = (ev.get("end_timestamp") or {}).get("relative") or 0.0
-        out.append(Utterance(
-            speaker=p.get("name") or f"speaker_{p.get('id')}",
-            start=float(start),
-            end=float(end),
-        ))
+        out.append(
+            Utterance(
+                speaker=p.get("name") or f"speaker_{p.get('id')}",
+                start=float(start),
+                end=float(end),
+            )
+        )
     out.sort(key=lambda u: u.start)
     return out
 
@@ -66,12 +69,14 @@ def load_fireflies(json_path: Path) -> list[Utterance]:
         sid = s.get("speaker_id")
         name = s.get("speaker_name") or f"speaker_{sid}"
         label = f"{name} #{sid}" if sid is not None else name
-        out.append(Utterance(
-            speaker=label,
-            start=parse_timestamp(s["startTime"]),
-            end=parse_timestamp(s["endTime"]),
-            text=s.get("sentence", ""),
-        ))
+        out.append(
+            Utterance(
+                speaker=label,
+                start=parse_timestamp(s["startTime"]),
+                end=parse_timestamp(s["endTime"]),
+                text=s.get("sentence", ""),
+            )
+        )
     out.sort(key=lambda u: u.start)
     return out
 
@@ -93,12 +98,14 @@ def load_macwhisper(txt_path: Path) -> list[Utterance]:
         except ValueError:
             continue
         text = "\n".join(lines[2:]).strip()
-        items.append(Utterance(
-            speaker=lines[0],
-            start=start,
-            end=start,  # placeholder; ustawiamy przez next.start poniżej
-            text=text,
-        ))
+        items.append(
+            Utterance(
+                speaker=lines[0],
+                start=start,
+                end=start,  # placeholder; ustawiamy przez next.start poniżej
+                text=text,
+            )
+        )
     items.sort(key=lambda u: u.start)
     # estymuj end z następnej wypowiedzi
     for i in range(len(items) - 1):
@@ -117,12 +124,14 @@ def load_elevenlabs(txt_path: Path) -> list[Utterance]:
         m = _EL_LINE_RE.match(line)
         if not m:
             continue
-        items.append(Utterance(
-            speaker=m.group(1),
-            start=parse_timestamp(m.group(2)),
-            end=0.0,
-            text=m.group(3),
-        ))
+        items.append(
+            Utterance(
+                speaker=m.group(1),
+                start=parse_timestamp(m.group(2)),
+                end=0.0,
+                text=m.group(3),
+            )
+        )
     items.sort(key=lambda u: u.start)
     for i in range(len(items) - 1):
         items[i].end = max(items[i].start, items[i + 1].start)
@@ -132,6 +141,7 @@ def load_elevenlabs(txt_path: Path) -> list[Utterance]:
 
 
 # ---------- aliasy ----------
+
 
 def apply_aliases(
     utterances: list[Utterance],
@@ -143,13 +153,16 @@ def apply_aliases(
     return [
         Utterance(
             speaker=aliases.get(u.speaker, u.speaker),
-            start=u.start, end=u.end, text=u.text,
+            start=u.start,
+            end=u.end,
+            text=u.text,
         )
         for u in utterances
     ]
 
 
 # ---------- statystyki + mapowanie ----------
+
 
 def speaker_stats(utterances: list[Utterance]) -> dict[str, dict]:
     stats: dict[str, dict] = {}
@@ -160,7 +173,9 @@ def speaker_stats(utterances: list[Utterance]) -> dict[str, dict]:
     return stats
 
 
-def _intervals_by_speaker(utterances: list[Utterance]) -> dict[str, list[tuple[float, float]]]:
+def _intervals_by_speaker(
+    utterances: list[Utterance],
+) -> dict[str, list[tuple[float, float]]]:
     out: dict[str, list[tuple[float, float]]] = {}
     for u in utterances:
         if u.end > u.start:
@@ -208,28 +223,32 @@ def map_to_ground_truth(
     for cand_sp, cand_intervals in cand_iv.items():
         cand_total = sum(e - s for s, e in cand_intervals)
         scored = [
-            (gt_sp, _total_overlap(cand_intervals, gt_iv[gt_sp]))
-            for gt_sp in gt_iv
+            (gt_sp, _total_overlap(cand_intervals, gt_iv[gt_sp])) for gt_sp in gt_iv
         ]
         scored.sort(key=lambda x: -x[1])
         best_sp, best_ov = scored[0] if scored else (None, 0.0)
-        mappings.append(SpeakerMapping(
-            cand_speaker=cand_sp,
-            gt_speaker=best_sp if best_ov > 0 else None,
-            overlap_s=best_ov,
-            cand_total_s=cand_total,
-            gt_total_s=gt_totals.get(best_sp, 0.0) if best_sp else 0.0,
-            breakdown=[(sp, ov) for sp, ov in scored[:top_n] if ov > 0],
-        ))
+        mappings.append(
+            SpeakerMapping(
+                cand_speaker=cand_sp,
+                gt_speaker=best_sp if best_ov > 0 else None,
+                overlap_s=best_ov,
+                cand_total_s=cand_total,
+                gt_total_s=gt_totals.get(best_sp, 0.0) if best_sp else 0.0,
+                breakdown=[(sp, ov) for sp, ov in scored[:top_n] if ov > 0],
+            )
+        )
     mappings.sort(key=lambda m: -m.cand_total_s)
     return mappings
 
 
 # ---------- raport ----------
 
+
 def _fmt_row(cells: list[str], widths: list[int]) -> str:
-    return "  ".join(c.ljust(w) if i == 0 else c.rjust(w)
-                     for i, (c, w) in enumerate(zip(cells, widths)))
+    return "  ".join(
+        c.ljust(w) if i == 0 else c.rjust(w)
+        for i, (c, w) in enumerate(zip(cells, widths))
+    )
 
 
 def _hms(s: float) -> str:
@@ -252,20 +271,30 @@ def format_report(
     lines.append("-" * sum(header_w + [3 * 3]))
     gt_stats = speaker_stats(gt)
     gt_total_talk = sum(s["talk_s"] for s in gt_stats.values())
-    lines.append(_fmt_row([
-        "ground_truth",
-        str(len(gt_stats)),
-        str(sum(s["turns"] for s in gt_stats.values())),
-        _hms(gt_total_talk),
-    ], header_w))
+    lines.append(
+        _fmt_row(
+            [
+                "ground_truth",
+                str(len(gt_stats)),
+                str(sum(s["turns"] for s in gt_stats.values())),
+                _hms(gt_total_talk),
+            ],
+            header_w,
+        )
+    )
     for name, utts in candidates.items():
         st = speaker_stats(utts)
-        lines.append(_fmt_row([
-            name,
-            str(len(st)),
-            str(sum(s["turns"] for s in st.values())),
-            _hms(sum(s["talk_s"] for s in st.values())),
-        ], header_w))
+        lines.append(
+            _fmt_row(
+                [
+                    name,
+                    str(len(st)),
+                    str(sum(s["turns"] for s in st.values())),
+                    _hms(sum(s["talk_s"] for s in st.values())),
+                ],
+                header_w,
+            )
+        )
     lines.append("")
 
     # Mapping per kandydat
@@ -274,8 +303,7 @@ def format_report(
     }
 
     # Per-speaker turns / talk-time mapped to GT
-    gt_speakers_sorted = sorted(gt_stats.keys(),
-                                key=lambda sp: -gt_stats[sp]["talk_s"])
+    gt_speakers_sorted = sorted(gt_stats.keys(), key=lambda sp: -gt_stats[sp]["talk_s"])
 
     lines.append("=" * 78)
     lines.append("TURNS PER OSOBA (kandydaci → ground-truth speaker)")
@@ -283,10 +311,12 @@ def format_report(
     cand_names = list(candidates.keys())
     sp_w = 26
     col_w = max(8, max((len(n) for n in cand_names), default=8))
-    lines.append(_fmt_row(
-        ["real speaker", "gt"] + cand_names,
-        [sp_w, 5] + [col_w] * len(cand_names),
-    ))
+    lines.append(
+        _fmt_row(
+            ["real speaker", "gt"] + cand_names,
+            [sp_w, 5] + [col_w] * len(cand_names),
+        )
+    )
     lines.append("-" * (sp_w + 5 + (col_w + 2) * len(cand_names)))
     for gt_sp in gt_speakers_sorted:
         row = [gt_sp[:sp_w], str(gt_stats[gt_sp]["turns"])]
@@ -304,10 +334,12 @@ def format_report(
     lines.append("=" * 78)
     lines.append("TALK TIME PER OSOBA (sekundy)")
     lines.append("=" * 78)
-    lines.append(_fmt_row(
-        ["real speaker", "gt"] + cand_names,
-        [sp_w, 7] + [col_w] * len(cand_names),
-    ))
+    lines.append(
+        _fmt_row(
+            ["real speaker", "gt"] + cand_names,
+            [sp_w, 7] + [col_w] * len(cand_names),
+        )
+    )
     lines.append("-" * (sp_w + 7 + (col_w + 2) * len(cand_names)))
     for gt_sp in gt_speakers_sorted:
         row = [gt_sp[:sp_w], f"{gt_stats[gt_sp]['talk_s']:.0f}"]
@@ -330,10 +362,7 @@ def format_report(
         for m in maps:
             if m.cand_total_s == 0:
                 continue
-            lead = (
-                f"  {m.cand_speaker:<22} "
-                f"talk={m.cand_total_s:6.1f}s → "
-            )
+            lead = f"  {m.cand_speaker:<22} talk={m.cand_total_s:6.1f}s → "
             if m.gt_speaker is None:
                 lines.append(lead + "(brak overlap)")
                 continue
@@ -346,9 +375,7 @@ def format_report(
                 + f"({pct_cand:.0f}% cand, {pct_gt:.0f}% gt)"
             )
             if len(m.breakdown) > 1:
-                rest = ", ".join(
-                    f"{sp[:20]}={ov:.0f}s" for sp, ov in m.breakdown[1:]
-                )
+                rest = ", ".join(f"{sp[:20]}={ov:.0f}s" for sp, ov in m.breakdown[1:])
                 lines.append(f"      also overlaps: {rest}")
 
     return "\n".join(lines) + "\n"

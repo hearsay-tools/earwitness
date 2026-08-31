@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
-
 from webapp import jobs as J
 from webapp import tasks  # noqa: F401 — rejestruje typy zadań
 from webapp.models import JOB_FAILED, JOB_QUEUED, JOB_RUNNING, Job, Meeting, utcnow
@@ -26,8 +25,12 @@ def test_enqueue_escalates_args_of_a_waiting_job(session):
     Inaczej dedupe oddaje stare zadanie bez `force_asr`, redirect wygląda na
     sukces, a użytkownik dostaje dokładnie ten sam transkrypt co miał.
     """
-    a = J.enqueue(session, "process", meeting_id="m1", args={"force_asr": False}, priority=100)
-    b = J.enqueue(session, "process", meeting_id="m1", args={"force_asr": True}, priority=20)
+    a = J.enqueue(
+        session, "process", meeting_id="m1", args={"force_asr": False}, priority=100
+    )
+    b = J.enqueue(
+        session, "process", meeting_id="m1", args={"force_asr": True}, priority=20
+    )
 
     assert b.id == a.id, "nadal jedno zadanie, nie dwa pipeline'y"
     assert b.args["force_asr"] is True
@@ -37,8 +40,12 @@ def test_enqueue_escalates_args_of_a_waiting_job(session):
 def test_enqueue_never_downgrades_a_confirmed_redo(session):
     """Zwykłe kliknięcie z listy nie może zdjąć `force_asr` z zadania, na które
     ktoś chwilę wcześniej potwierdził płatny redo."""
-    a = J.enqueue(session, "process", meeting_id="m1", args={"force_asr": True}, priority=20)
-    b = J.enqueue(session, "process", meeting_id="m1", args={"force_asr": False}, priority=100)
+    a = J.enqueue(
+        session, "process", meeting_id="m1", args={"force_asr": True}, priority=20
+    )
+    b = J.enqueue(
+        session, "process", meeting_id="m1", args={"force_asr": False}, priority=100
+    )
 
     assert b.id == a.id
     assert b.args["force_asr"] is True

@@ -74,6 +74,7 @@ class Base(DeclarativeBase):
 # Auth
 # --------------------------------------------------------------------------
 
+
 class User(Base):
     __tablename__ = "users"
 
@@ -125,7 +126,9 @@ _RAW_TO_GROUP = {
 
 
 def status_group(raw_code: Optional[str]) -> str:
-    return _RAW_TO_GROUP.get((raw_code or "").lower(), "failed" if raw_code else "scheduled")
+    return _RAW_TO_GROUP.get(
+        (raw_code or "").lower(), "failed" if raw_code else "scheduled"
+    )
 
 
 # Stan lokalnych assetów i transkryptu — sterują tym, co można kliknąć w UI.
@@ -136,14 +139,24 @@ TRANSCRIPT_STATES = ("none", "queued", "running", "ready", "failed")
 # Jedna oś zamiast pary (status_group, transcript_state); kolejność to cykl
 # życia (sidebar, sortowanie), etykiety mieszczą się w webapp/labels.py.
 USER_STATUS_ORDER: tuple[str, ...] = (
-    "upcoming", "in_meeting", "processing", "to_process",
-    "ready", "failed", "no_recording",
+    "upcoming",
+    "in_meeting",
+    "processing",
+    "to_process",
+    "ready",
+    "failed",
+    "no_recording",
 )
 
 # Widok domyślny „Finished": wszystko, co się zakończyło — z transkryptem,
 # do przetworzenia, nieudane i bez nagrania. Żywe stany (upcoming /
 # in_meeting / processing) trzyma maszyna.
-DEFAULT_VIEW_STATUSES: tuple[str, ...] = ("to_process", "ready", "failed", "no_recording")
+DEFAULT_VIEW_STATUSES: tuple[str, ...] = (
+    "to_process",
+    "ready",
+    "failed",
+    "no_recording",
+)
 
 
 class Meeting(Base):
@@ -157,7 +170,9 @@ class Meeting(Base):
     meeting_url: Mapped[Optional[str]] = mapped_column(String(500))
 
     title: Mapped[Optional[str]] = mapped_column(String(500), index=True)
-    title_source: Mapped[Optional[str]] = mapped_column(String(20))  # calendar / manual / fallback
+    title_source: Mapped[Optional[str]] = mapped_column(
+        String(20)
+    )  # calendar / manual / fallback
 
     join_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime, index=True)
     started_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime, index=True)
@@ -166,18 +181,24 @@ class Meeting(Base):
 
     status_code: Mapped[Optional[str]] = mapped_column(String(60), index=True)
     status_sub_code: Mapped[Optional[str]] = mapped_column(String(60))
-    status_group: Mapped[str] = mapped_column(String(20), default="scheduled", index=True)
+    status_group: Mapped[str] = mapped_column(
+        String(20), default="scheduled", index=True
+    )
     status_updated_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
 
     recording_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
-    media_expires_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime, index=True)
+    media_expires_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        UtcDateTime, index=True
+    )
     has_audio_mixed: Mapped[bool] = mapped_column(Boolean, default=False)
     has_audio_separate: Mapped[bool] = mapped_column(Boolean, default=False)
 
     asset_state: Mapped[str] = mapped_column(String(20), default="none", index=True)
     asset_dir: Mapped[Optional[str]] = mapped_column(String(1000))
     asset_error: Mapped[Optional[str]] = mapped_column(Text)
-    transcript_state: Mapped[str] = mapped_column(String(20), default="none", index=True)
+    transcript_state: Mapped[str] = mapped_column(
+        String(20), default="none", index=True
+    )
     transcript_error: Mapped[Optional[str]] = mapped_column(Text)
 
     # Denormalizacja pod wyszukiwarkę: "wiktor jarka|beata patfield|..."
@@ -192,10 +213,14 @@ class Meeting(Base):
     created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow)
 
     participants: Mapped[list["MeetingParticipant"]] = relationship(
-        back_populates="meeting", cascade="all, delete-orphan", lazy="selectin",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
     transcripts: Mapped[list["Transcript"]] = relationship(
-        back_populates="meeting", cascade="all, delete-orphan", lazy="selectin",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+        lazy="selectin",
         order_by="Transcript.created_at.desc()",
     )
 
@@ -227,9 +252,9 @@ class Meeting(Base):
             or self.asset_state == "failed"
         ):
             return "failed"
-        if (
-            self.asset_state in ("queued", "fetching")
-            or self.transcript_state in ("queued", "running")
+        if self.asset_state in ("queued", "fetching") or self.transcript_state in (
+            "queued",
+            "running",
         ):
             return "processing"
         if (
@@ -239,7 +264,10 @@ class Meeting(Base):
                 self.asset_state == "ready"
                 or (
                     self.recording_id is not None
-                    and (self.media_expires_at is None or self.media_expires_at > utcnow())
+                    and (
+                        self.media_expires_at is None
+                        or self.media_expires_at > utcnow()
+                    )
                 )
             )
         ):
@@ -260,7 +288,10 @@ class Meeting(Base):
             current = best.get(p.key)
             if current is None or (current.source != "recall" and p.source == "recall"):
                 best[p.key] = p
-        return sorted(best.values(), key=lambda p: (p.source != "recall", not p.is_host, p.display))
+        return sorted(
+            best.values(),
+            key=lambda p: (p.source != "recall", not p.is_host, p.display),
+        )
 
 
 Index("ix_meetings_started_status", Meeting.started_at, Meeting.status_group)
@@ -312,9 +343,22 @@ def user_status_case(now: dt.datetime) -> Case:
 
 # Nazwy botów-notetakerów, które nie są ludźmi — nie chcemy ich w filtrach.
 _BOT_NAME_MARKERS = (
-    "notetaker", "note taker", "fireflies", "otter", "fathom", "read.ai",
-    "recall.ai", "avoma", "gong", "chorus", "tl;dv", "tldv", "sembly",
-    "zoom ai companion", "meeting recorder", "transcription bot",
+    "notetaker",
+    "note taker",
+    "fireflies",
+    "otter",
+    "fathom",
+    "read.ai",
+    "recall.ai",
+    "avoma",
+    "gong",
+    "chorus",
+    "tl;dv",
+    "tldv",
+    "sembly",
+    "zoom ai companion",
+    "meeting recorder",
+    "transcription bot",
 )
 
 
@@ -343,9 +387,15 @@ class MeetingParticipant(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
-    source: Mapped[str] = mapped_column(String(20), default="recall")  # recall | calendar
-    key: Mapped[str] = mapped_column(String(400), index=True)  # znormalizowany email lub nazwa
+    meeting_id: Mapped[str] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    source: Mapped[str] = mapped_column(
+        String(20), default="recall"
+    )  # recall | calendar
+    key: Mapped[str] = mapped_column(
+        String(400), index=True
+    )  # znormalizowany email lub nazwa
     name: Mapped[Optional[str]] = mapped_column(String(300))
     email: Mapped[Optional[str]] = mapped_column(String(320), index=True)
     # Skąd wziął się adres: `recall` (ich fuzzy matching), `calendar`
@@ -370,7 +420,9 @@ class Transcript(Base):
     __tablename__ = "transcripts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    meeting_id: Mapped[str] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
     recording_id: Mapped[Optional[str]] = mapped_column(String(64))
 
     engine: Mapped[str] = mapped_column(String(60), default="pipeline-recall")
@@ -384,7 +436,9 @@ class Transcript(Base):
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
     stats: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
 
-    created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        UtcDateTime, default=utcnow, index=True
+    )
 
     meeting: Mapped[Meeting] = relationship(back_populates="transcripts")
 
@@ -418,7 +472,8 @@ class Job(Base):
     priority: Mapped[int] = mapped_column(Integer, default=100)  # mniej = pilniej
 
     meeting_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("meetings.id", ondelete="CASCADE"), index=True,
+        ForeignKey("meetings.id", ondelete="CASCADE"),
+        index=True,
     )
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(300), index=True)
     args: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
@@ -432,8 +487,12 @@ class Job(Base):
     result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
     error: Mapped[Optional[str]] = mapped_column(Text)
 
-    scheduled_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
-    created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    scheduled_at: Mapped[dt.datetime] = mapped_column(
+        UtcDateTime, default=utcnow, index=True
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(
+        UtcDateTime, default=utcnow, index=True
+    )
     started_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
     finished_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
     heartbeat_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime, index=True)

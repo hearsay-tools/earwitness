@@ -24,12 +24,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from transcripts.energy_diarization import diarize_by_energy
 from transcripts.energy_diarization import format_transcript as format_energy_transcript
 from transcripts.recall_client import download_bot_assets
 from transcripts.transcribe import transcribe as elevenlabs_transcribe
+
 from webapp.config import settings
 from webapp.jobs import JobContext, enqueue, task
 from webapp.models import Meeting, Transcript, User, utcnow
@@ -93,6 +92,7 @@ def _meeting(ctx: JobContext) -> Meeting:
 # Pobieranie assetów
 # --------------------------------------------------------------------------
 
+
 def _force_asr(ctx: JobContext) -> bool:
     """Czy pominąć cache `raw.json` i zapłacić za ASR jeszcze raz.
 
@@ -109,7 +109,9 @@ def _do_fetch(ctx: JobContext, meeting: Meeting, force: bool = False) -> dict[st
     # porażce nigdy nie ma ufać bajtom, które sam ten błąd zostawił.
     force = force or meeting.asset_state == "failed"
     if meeting.asset_state == "ready" and not force:
-        ctx.progress(step="assets already on disk", line=f"assets in {meeting.asset_dir}")
+        ctx.progress(
+            step="assets already on disk", line=f"assets in {meeting.asset_dir}"
+        )
         return {"skipped": True, "dir": meeting.asset_dir}
 
     meeting.asset_state = "fetching"
@@ -143,7 +145,10 @@ def _do_fetch(ctx: JobContext, meeting: Meeting, force: bool = False) -> dict[st
         meeting.asset_state = "failed"
         meeting.asset_error = (
             "Incomplete asset set (audio_mixed.mp3 + audio_separate raw required). "
-            + ("; ".join(summary.get("errors", []))[:1000] or "The media may have expired (TTL).")
+            + (
+                "; ".join(summary.get("errors", []))[:1000]
+                or "The media may have expired (TTL)."
+            )
         )
         ctx.session.commit()
         raise RuntimeError(meeting.asset_error)
@@ -170,6 +175,7 @@ def fetch_assets(ctx: JobContext) -> dict[str, Any]:
 # Pipeline (ASR + diaryzacja)
 # --------------------------------------------------------------------------
 
+
 def _transcript_paths(meeting: Meeting) -> tuple[Path, Path]:
     base = settings.transcripts_dir / meeting.id
     base.mkdir(parents=True, exist_ok=True)
@@ -177,7 +183,9 @@ def _transcript_paths(meeting: Meeting) -> tuple[Path, Path]:
     return base / f"{stem}.txt", base / f"{stem}.raw.json"
 
 
-def _do_pipeline(ctx: JobContext, meeting: Meeting, force_asr: bool = False) -> dict[str, Any]:
+def _do_pipeline(
+    ctx: JobContext, meeting: Meeting, force_asr: bool = False
+) -> dict[str, Any]:
     api_key = settings.elevenlabs_api_key
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY is not set — the pipeline cannot start")
@@ -219,8 +227,11 @@ def _do_pipeline(ctx: JobContext, meeting: Meeting, force_asr: bool = False) -> 
     lang = language or data.get("language_code")
 
     # Krok 2: diaryzacja energią izolowanych kanałów.
-    ctx.progress(65, "channel-energy diarization",
-                 f"words: {len([w for w in words if w.get('type') == 'word'])}")
+    ctx.progress(
+        65,
+        "channel-energy diarization",
+        f"words: {len([w for w in words if w.get('type') == 'word'])}",
+    )
     stream = _CtxStream(ctx)
     try:
         with redirect_stderr(stream), redirect_stdout(stream):
@@ -252,7 +263,9 @@ def _do_pipeline(ctx: JobContext, meeting: Meeting, force_asr: bool = False) -> 
         language=lang,
         text_path=str(txt_path.relative_to(settings.transcripts_dir)),
         raw_path=str(raw_path.relative_to(settings.transcripts_dir)),
-        speakers=[{"name": s, "seconds": round(talk_time.get(s, 0.0), 1)} for s in speakers],
+        speakers=[
+            {"name": s, "seconds": round(talk_time.get(s, 0.0), 1)} for s in speakers
+        ],
         utterance_count=len(utts),
         word_count=sum(len(u.text.split()) for u in utts),
         duration_seconds=max((u.end for u in utts), default=0.0),
@@ -318,6 +331,7 @@ def process_meeting(ctx: JobContext) -> dict[str, Any]:
 # Sync
 # --------------------------------------------------------------------------
 
+
 @task("sync_recall")
 def sync_recall(ctx: JobContext) -> dict[str, Any]:
     if not settings.recall_api_key:
@@ -355,7 +369,9 @@ def sync_recall(ctx: JobContext) -> dict[str, Any]:
 
         ident = resolve_identities(ctx.session)
         result["identities"] = ident
-        ctx.log(f"emails matched: {ident['matched']}, without an email: {ident['left']}")
+        ctx.log(
+            f"emails matched: {ident['matched']}, without an email: {ident['left']}"
+        )
 
     if ctx.args.get("autoprocess", settings.autoprocess):
         queued = _autoqueue(ctx)
@@ -370,7 +386,9 @@ def _sync_calendar(ctx: JobContext, *, only_missing: bool = False) -> dict[str, 
     from webapp.gcal import enrich_meetings, pick_calendar_user
 
     user_id = ctx.args.get("user_id")
-    user = ctx.session.get(User, user_id) if user_id else pick_calendar_user(ctx.session)
+    user = (
+        ctx.session.get(User, user_id) if user_id else pick_calendar_user(ctx.session)
+    )
     if user is None:
         return {"skipped": "no user with calendar access"}
     ctx.progress(80, "Google Calendar", f"calendar: {user.email}")
@@ -439,16 +457,17 @@ def _autoqueue(ctx: JobContext) -> int:
 # Utrzymanie
 # --------------------------------------------------------------------------
 
+
 @task("repair_participants")
 def repair_participants(ctx: JobContext) -> dict[str, Any]:
     """Scal zdublowanych uczestników (ta sama osoba pod dwoma kluczami)."""
-    from webapp.recall_sync import repair_participant_keys
-
-    from webapp.recall_sync import resolve_identities
+    from webapp.recall_sync import repair_participant_keys, resolve_identities
 
     ctx.progress(10, "matching names to emails")
     matched = resolve_identities(ctx.session)
-    ctx.log(f"emails matched: {matched['matched']}, without an email: {matched['left']}")
+    ctx.log(
+        f"emails matched: {matched['matched']}, without an email: {matched['left']}"
+    )
     ctx.progress(60, "recomputing identity keys")
     result = repair_participant_keys(ctx.session)
     result.update(matched)
@@ -481,14 +500,16 @@ def cleanup_audio(ctx: JobContext) -> dict[str, Any]:
     cutoff = utcnow() - dt.timedelta(days=days)
     freed = 0
     removed = 0
-    rows = list(ctx.session.execute(
-        select(Meeting).where(
-            Meeting.transcript_state == "ready",
-            Meeting.asset_state == "ready",
-            Meeting.started_at.is_not(None),
-            Meeting.started_at < cutoff,
-        )
-    ).scalars())
+    rows = list(
+        ctx.session.execute(
+            select(Meeting).where(
+                Meeting.transcript_state == "ready",
+                Meeting.asset_state == "ready",
+                Meeting.started_at.is_not(None),
+                Meeting.started_at < cutoff,
+            )
+        ).scalars()
+    )
     for meeting in rows:
         if not meeting.asset_dir:
             continue
@@ -525,12 +546,14 @@ def parse_transcript(text: str) -> list[dict[str, Any]]:
                 out[-1]["text"] += " " + line.strip()
             continue
         h, mnt, s = (int(x) for x in m.group("ts").split(":"))
-        out.append({
-            "speaker": m.group("speaker"),
-            "timestamp": m.group("ts"),
-            "seconds": h * 3600 + mnt * 60 + s,
-            "text": m.group("text"),
-        })
+        out.append(
+            {
+                "speaker": m.group("speaker"),
+                "timestamp": m.group("ts"),
+                "seconds": h * 3600 + mnt * 60 + s,
+                "text": m.group("text"),
+            }
+        )
     return out
 
 
@@ -546,7 +569,9 @@ def transcript_text(transcript: Transcript) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def to_vtt(utterances: list[dict[str, Any]], total_seconds: Optional[float] = None) -> str:
+def to_vtt(
+    utterances: list[dict[str, Any]], total_seconds: Optional[float] = None
+) -> str:
     def stamp(sec: float) -> str:
         ms = int((sec - int(sec)) * 1000)
         s = int(sec)
@@ -558,12 +583,20 @@ def to_vtt(utterances: list[dict[str, Any]], total_seconds: Optional[float] = No
         nxt = utterances[i + 1]["seconds"] if i + 1 < len(utterances) else None
         end = float(nxt) if nxt is not None else (total_seconds or start + 5)
         end = max(end, start + 1)
-        lines += [f"{stamp(start)} --> {stamp(end)}", f"<v {u['speaker']}>{u['text']}", ""]
+        lines += [
+            f"{stamp(start)} --> {stamp(end)}",
+            f"<v {u['speaker']}>{u['text']}",
+            "",
+        ]
     return "\n".join(lines)
 
 
 def to_markdown(meeting: Meeting, utterances: list[dict[str, Any]]) -> str:
-    when = meeting.occurred_at.strftime("%Y-%m-%d %H:%M UTC") if meeting.occurred_at else "—"
+    when = (
+        meeting.occurred_at.strftime("%Y-%m-%d %H:%M UTC")
+        if meeting.occurred_at
+        else "—"
+    )
     head = [f"# {meeting.title}", "", f"- Date: {when}"]
     people = [p.display for p in meeting.human_participants]
     if people:

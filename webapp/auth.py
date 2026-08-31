@@ -67,7 +67,11 @@ def authorize_params() -> dict[str, str]:
     wydał refresh token — bez niego kalendarz da się odpytać tylko przez
     godzinę po zalogowaniu.
     """
-    params = {"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"}
+    params = {
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+    }
     if len(settings.allowed_domains) == 1:
         params["hd"] = settings.allowed_domains[0]
     return params
@@ -83,9 +87,13 @@ def upsert_user(session: Session, claims: dict, token: dict) -> User:
         raise DomainNotAllowed(email)
 
     sub = claims.get("sub") or email
-    user = session.execute(select(User).where(User.google_sub == sub)).scalar_one_or_none()
+    user = session.execute(
+        select(User).where(User.google_sub == sub)
+    ).scalar_one_or_none()
     if user is None:
-        user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        user = session.execute(
+            select(User).where(User.email == email)
+        ).scalar_one_or_none()
     if user is None:
         user = User(google_sub=sub, email=email)
         session.add(user)
@@ -115,7 +123,9 @@ def upsert_user(session: Session, claims: dict, token: dict) -> User:
 
 def dev_user(session: Session) -> User:
     """Konto zastępcze przy AUTH_DISABLED=1 (tylko lokalny dev)."""
-    user = session.execute(select(User).where(User.email == "dev@localhost")).scalar_one_or_none()
+    user = session.execute(
+        select(User).where(User.email == "dev@localhost")
+    ).scalar_one_or_none()
     if user is None:
         user = User(google_sub="dev", email="dev@localhost", name="Dev (auth disabled)")
         session.add(user)
@@ -140,7 +150,9 @@ def get_current_user(
 
 def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Wymagane logowanie")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Wymagane logowanie"
+        )
     return user
 
 

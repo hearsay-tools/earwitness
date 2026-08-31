@@ -101,8 +101,6 @@ def build_ground_truth(
     lines.append("#")
 
     for e in entries:
-        lines.append(
-            f"{e.name} [{_format_range(e.start, e.end)}] ({e.duration:.1f}s)"
-        )
+        lines.append(f"{e.name} [{_format_range(e.start, e.end)}] ({e.duration:.1f}s)")
 
     return "\n".join(lines) + "\n"

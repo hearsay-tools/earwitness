@@ -17,7 +17,6 @@ os.environ.setdefault("TRANSCRIPTS_DIR", str(_TMP / "transcripts"))
 os.environ.setdefault("AUTH_DISABLED", "1")
 
 import pytest  # noqa: E402
-
 from webapp.db import SessionLocal, engine  # noqa: E402
 from webapp.models import Base  # noqa: E402
 

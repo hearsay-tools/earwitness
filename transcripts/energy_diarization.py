@@ -46,14 +46,14 @@ TIEBREAK_PAD = 0.6  # s — margines wycinka do mini-ASR
 TIEBREAK_MIN_TOKEN = 3  # krótkie tokeny ("i", "to") są w wielu kanałach
 
 # odzysk słów cichszego mówcy (okna z energią kanału bez przypisanych słów)
-RECOVERY_MIN_DUR = 0.2    # s ciągłej energii mowy -> kandydat na okno odzysku
-                          # (backchannele "Sure"/"Okay" to bursty 0.2-0.5 s)
-RECOVERY_MAX_GAP = 0.25   # s dziury w energii tolerowanej wewnątrz przebiegu
-RECOVERY_JOIN_GAP = 1.5   # s — łączenie sąsiednich okien tego samego mówcy
-                          # (mniej klipów, dłuższy kontekst = stabilniejszy mini-ASR)
-RECOVERY_PAD = 0.6        # s — margines wycinka do mini-ASR
+RECOVERY_MIN_DUR = 0.2  # s ciągłej energii mowy -> kandydat na okno odzysku
+# (backchannele "Sure"/"Okay" to bursty 0.2-0.5 s)
+RECOVERY_MAX_GAP = 0.25  # s dziury w energii tolerowanej wewnątrz przebiegu
+RECOVERY_JOIN_GAP = 1.5  # s — łączenie sąsiednich okien tego samego mówcy
+# (mniej klipów, dłuższy kontekst = stabilniejszy mini-ASR)
+RECOVERY_PAD = 0.6  # s — margines wycinka do mini-ASR
 RECOVERY_MATCH_TOL = 1.0  # s — dedup: to samo słowo tego samego mówcy w tej odległości
-RECOVERY_MAX_WPS = 5.0    # walidacja mini-ASR: więcej słów/s = halucynacja, odrzuć
+RECOVERY_MAX_WPS = 5.0  # walidacja mini-ASR: więcej słów/s = halucynacja, odrzuć
 
 # mini-ASR (tiebreak + recovery): równoległość i retry. STT ma wyższe limity
 # concurrency niż TTS (10+ na niskich planach) — 8 to bezpieczny default.
@@ -98,35 +98,43 @@ def _safe_label(pid: int, name: str) -> str:
 
 # ---------- kanały ----------
 
+
 def load_parts(rec_dir: Path) -> list[_Part]:
     """Party raw z katalogu nagrania (recall-fetch). Wybiera artefakt format=raw
     z recording.json i czyta jego manifest parts_<id8>.json."""
     meta = json.loads((rec_dir / "recording.json").read_text())
-    raw_artifacts = [a for a in meta.get("audio_separate", []) if a.get("format") == "raw"]
+    raw_artifacts = [
+        a for a in meta.get("audio_separate", []) if a.get("format") == "raw"
+    ]
     if not raw_artifacts:
         raise FileNotFoundError(
             f"{rec_dir}: brak artefaktu audio_separate w formacie raw "
             "(pobierz przez recall-fetch)"
         )
-    manifest_path = rec_dir / "audio_separate" / f"parts_{raw_artifacts[0]['id'][:8]}.json"
+    manifest_path = (
+        rec_dir / "audio_separate" / f"parts_{raw_artifacts[0]['id'][:8]}.json"
+    )
     manifest = json.loads(manifest_path.read_text())
     parts: list[_Part] = []
     for m in manifest:
         p = m["participant"]
         path = (
-            rec_dir / "audio_separate"
+            rec_dir
+            / "audio_separate"
             / _safe_label(p.get("id") or 0, p.get("name") or "unknown")
             / f"{m['id']}.raw"
         )
         if not path.exists():
             print(f"WARN: brak pliku parta {path}", file=sys.stderr)
             continue
-        parts.append(_Part(
-            name=p.get("name") or "unknown",
-            start=(m.get("start_timestamp") or {}).get("relative", 0.0),
-            duration=m.get("duration") or 0.0,
-            path=path,
-        ))
+        parts.append(
+            _Part(
+                name=p.get("name") or "unknown",
+                start=(m.get("start_timestamp") or {}).get("relative", 0.0),
+                duration=m.get("duration") or 0.0,
+                path=path,
+            )
+        )
     if not parts:
         raise FileNotFoundError(f"{rec_dir}: manifest bez dostępnych plików raw")
     return parts
@@ -150,7 +158,7 @@ def build_envelopes(parts: list[_Part], max_sec: float) -> dict[str, list[float]
             gi = base_frame + fi
             if gi >= n_frames:
                 break
-            chunk = samples[fi * FRAME:(fi + 1) * FRAME]
+            chunk = samples[fi * FRAME : (fi + 1) * FRAME]
             acc = 0
             for v in chunk:
                 acc += v * v
@@ -167,7 +175,9 @@ def _word_energy(env: list[float], start: float, end: float) -> float:
     return sum(window) / len(window)
 
 
-def _channel_wav(parts: list[_Part], speaker: str, start: float, end: float) -> Optional[bytes]:
+def _channel_wav(
+    parts: list[_Part], speaker: str, start: float, end: float
+) -> Optional[bytes]:
     for part in parts:
         if part.name != speaker:
             continue
@@ -190,19 +200,26 @@ def _channel_wav(parts: list[_Part], speaker: str, start: float, end: float) -> 
 
 # ---------- przypisanie ----------
 
+
 def _switch_penalty(gap: float) -> float:
     if gap < 0.35:
-        return 4.0   # środek frazy — flip musi być mocno uzasadniony
+        return 4.0  # środek frazy — flip musi być mocno uzasadniony
     if gap < 0.8:
         return 2.0
-    return 0.5       # naturalna pauza — zmiana niemal darmowa
+    return 0.5  # naturalna pauza — zmiana niemal darmowa
 
 
-def _viterbi(words: list[dict], env: dict[str, list[float]],
-             boosts: Optional[dict[int, str]] = None) -> list[str]:
+def _viterbi(
+    words: list[dict],
+    env: dict[str, list[float]],
+    boosts: Optional[dict[int, str]] = None,
+) -> list[str]:
     speakers = list(env)
     emis = [
-        {s: math.log(_word_energy(env[s], w["start"], w["end"]) + 1.0) for s in speakers}
+        {
+            s: math.log(_word_energy(env[s], w["start"], w["end"]) + 1.0)
+            for s in speakers
+        }
         for w in words
     ]
     for i, s in (boosts or {}).items():
@@ -216,7 +233,9 @@ def _viterbi(words: list[dict], env: dict[str, list[float]],
         bp: dict[str, str] = {}
         for s in speakers:
             best_prev = max(speakers, key=lambda p: score[p] - (pen if p != s else 0.0))
-            new_score[s] = score[best_prev] - (pen if best_prev != s else 0.0) + emis[i][s]
+            new_score[s] = (
+                score[best_prev] - (pen if best_prev != s else 0.0) + emis[i][s]
+            )
             bp[s] = best_prev
         score = new_score
         back.append(bp)
@@ -227,7 +246,9 @@ def _viterbi(words: list[dict], env: dict[str, list[float]],
     return path[::-1]
 
 
-def _flag_disputed(words: list[dict], env: dict[str, list[float]]) -> list[tuple[int, str, str]]:
+def _flag_disputed(
+    words: list[dict], env: dict[str, list[float]]
+) -> list[tuple[int, str, str]]:
     out = []
     for i, w in enumerate(words):
         ranked = sorted(
@@ -253,9 +274,14 @@ def _convert_with_retry(client, **kwargs):
             time.sleep(1.5 * (attempt + 1))
 
 
-def _tiebreak(words: list[dict], disputed: list[tuple[int, str, str]],
-              parts: list[_Part], api_key: str, language: Optional[str],
-              model_id: str) -> dict[int, str]:
+def _tiebreak(
+    words: list[dict],
+    disputed: list[tuple[int, str, str]],
+    parts: list[_Part],
+    api_key: str,
+    language: Optional[str],
+    model_id: str,
+) -> dict[int, str]:
     """Sporne przebiegi: sprawdź, w którym izolowanym kanale słowa faktycznie
     są (mini-ASR wycinka). Zwraca {index: mówca} jako boosty dla Viterbi #2."""
     from elevenlabs.client import ElevenLabs
@@ -323,6 +349,7 @@ def _tiebreak(words: list[dict], disputed: list[tuple[int, str, str]],
 
 # ---------- odzysk słów cichszego mówcy ----------
 
+
 def _active_runs(row: list[float]) -> list[tuple[float, float]]:
     """Przebiegi energii > NOISE_FLOOR (>= RECOVERY_MIN_DUR, dziury do
     RECOVERY_MAX_GAP tolerowane)."""
@@ -346,7 +373,9 @@ def _active_runs(row: list[float]) -> list[tuple[float, float]]:
 
 
 def find_recovery_windows(
-    words: list[dict], assigned: list[str], env: dict[str, list[float]],
+    words: list[dict],
+    assigned: list[str],
+    env: dict[str, list[float]],
 ) -> list[tuple[str, float, float]]:
     """Okna (speaker, t0, t1), w których kanał mówcy ma ciągłą energię mowy,
     a transkrypt nie zawiera żadnego słowa przypisanego temu mówcy — czyli
@@ -360,11 +389,16 @@ def find_recovery_windows(
 
     windows: list[tuple[str, float, float]] = []
     for s, row in env.items():
-        empty = [(t0, t1) for t0, t1 in _active_runs(row) if not has_own_words(s, t0, t1)]
+        empty = [
+            (t0, t1) for t0, t1 in _active_runs(row) if not has_own_words(s, t0, t1)
+        ]
         merged: list[list[float]] = []
         for t0, t1 in empty:
-            if (merged and t0 - merged[-1][1] <= RECOVERY_JOIN_GAP
-                    and not has_own_words(s, merged[-1][1], t0)):
+            if (
+                merged
+                and t0 - merged[-1][1] <= RECOVERY_JOIN_GAP
+                and not has_own_words(s, merged[-1][1], t0)
+            ):
                 merged[-1][1] = t1
             else:
                 merged.append([t0, t1])
@@ -374,9 +408,13 @@ def find_recovery_windows(
 
 
 def _recover_missing_speech(
-    words: list[dict], assigned: list[str],
+    words: list[dict],
+    assigned: list[str],
     windows: list[tuple[str, float, float]],
-    parts: list[_Part], api_key: str, language: Optional[str], model_id: str,
+    parts: list[_Part],
+    api_key: str,
+    language: Optional[str],
+    model_id: str,
 ) -> tuple[list[Utterance], dict]:
     """Mini-ASR okien odzysku na izolowanych kanałach. Dedup: odpada słowo,
     które w mixed jest już przypisane TEMU SAMEMU mówcy w RECOVERY_MATCH_TOL
@@ -388,9 +426,7 @@ def _recover_missing_speech(
     from elevenlabs.client import ElevenLabs
 
     client = ElevenLabs(api_key=api_key)
-    mixed_index = [
-        (_norm(w["text"]), w["start"], s) for w, s in zip(words, assigned)
-    ]
+    mixed_index = [(_norm(w["text"]), w["start"], s) for w, s in zip(words, assigned)]
 
     def already_in_mixed(speaker: str, token: str, start: float) -> bool:
         return any(
@@ -429,8 +465,9 @@ def _recover_missing_speech(
                 kwargs["language_code"] = language
             resp = _convert_with_retry(client, **kwargs)
         except Exception as e:  # noqa: BLE001 — odzysk jest best-effort
-            print(f"WARN: recovery ASR fail ({speaker} @{t0:.1f}s): {e}",
-                  file=sys.stderr)
+            print(
+                f"WARN: recovery ASR fail ({speaker} @{t0:.1f}s): {e}", file=sys.stderr
+            )
             return res
         asr_words = [w for w in (resp.words or []) if w.type == "word"]
         if not asr_words:
@@ -453,11 +490,13 @@ def _recover_missing_speech(
             if already_in_mixed(speaker, token, start):
                 res["dup"] += 1
                 continue
-            res["kept"].append({
-                "text": w.text.strip(),
-                "start": start,
-                "end": clip_start + (w.end or 0.0),
-            })
+            res["kept"].append(
+                {
+                    "text": w.text.strip(),
+                    "start": start,
+                    "end": clip_start + (w.end or 0.0),
+                }
+            )
         return res
 
     with ThreadPoolExecutor(max_workers=_asr_concurrency()) as ex:
@@ -471,8 +510,11 @@ def _recover_missing_speech(
         stats["recovery_dropped_invalid"] += res["invalid"]
         stats["recovery_words"] += len(res["kept"])
         for w in res["kept"]:
-            if (recovered and recovered[-1].speaker == speaker
-                    and w["start"] - recovered[-1].end <= UTT_GAP):
+            if (
+                recovered
+                and recovered[-1].speaker == speaker
+                and w["start"] - recovered[-1].end <= UTT_GAP
+            ):
                 recovered[-1].text += f" {w['text']}"
                 recovered[-1].end = w["end"]
             else:
@@ -483,6 +525,7 @@ def _recover_missing_speech(
 
 
 # ---------- API ----------
+
 
 def diarize_by_energy(
     rec_dir: Path,
@@ -542,7 +585,11 @@ def diarize_by_energy(
     # grupowanie w wypowiedzi
     utts: list[Utterance] = []
     for speaker, w in zip(assigned, words):
-        if utts and utts[-1].speaker == speaker and w["start"] - utts[-1].end <= UTT_GAP:
+        if (
+            utts
+            and utts[-1].speaker == speaker
+            and w["start"] - utts[-1].end <= UTT_GAP
+        ):
             utts[-1].text += f" {w['text']}"
             utts[-1].end = w["end"]
         else:
@@ -557,7 +604,13 @@ def diarize_by_energy(
         windows = find_recovery_windows(words, assigned, env)
         lap("recovery_windows_s")
         recovered, rec_stats = _recover_missing_speech(
-            words, assigned, windows, parts, api_key, language, model_id,
+            words,
+            assigned,
+            windows,
+            parts,
+            api_key,
+            language,
+            model_id,
         )
         lap("recovery_asr_s")
         stats.update(rec_stats)

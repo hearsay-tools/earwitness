@@ -14,6 +14,10 @@ from .comparison import (
     load_ground_truth,
     load_macwhisper,
 )
+from .energy_diarization import diarize_by_energy
+from .energy_diarization import format_transcript as format_energy_transcript
+from .formatter import format_transcript
+from .ground_truth import build_ground_truth
 from .hybrid import (
     assign_speakers,
     load_speaker_intervals,
@@ -39,11 +43,7 @@ from .replicate_client import (
     transcribe_and_diarize,
     transcribe_cloud,
 )
-from .energy_diarization import diarize_by_energy
-from .energy_diarization import format_transcript as format_energy_transcript
 from .text_comparison import format_text_report
-from .formatter import format_transcript
-from .ground_truth import build_ground_truth
 from .transcribe import transcribe
 
 
@@ -65,33 +65,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     t.add_argument("audio", type=Path, help="Ścieżka do pliku audio")
     t.add_argument(
-        "-o", "--output", type=Path, default=None,
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
         help="Plik wyjściowy (domyślnie stdout)",
     )
     g = t.add_mutually_exclusive_group()
     g.add_argument(
-        "-n", "--num-speakers", type=int, default=None,
+        "-n",
+        "--num-speakers",
+        type=int,
+        default=None,
         help="Sztywna liczba rozmówców (wyklucza --threshold)",
     )
     g.add_argument(
-        "-t", "--threshold", type=float, default=None,
+        "-t",
+        "--threshold",
+        type=float,
+        default=None,
         help=(
             "Diarization threshold 0.0–0.4 (API limit, nie 0–1). "
             "Wyższy = bardziej konserwatywny (mniej rozmówców)."
         ),
     )
     g.add_argument(
-        "--no-diarize", action="store_true",
+        "--no-diarize",
+        action="store_true",
         help="Wyłącz diaryzację całkowicie (diarize=False na API). "
-             "Wszystkie słowa bez speaker_id.",
+        "Wszystkie słowa bez speaker_id.",
     )
-    t.add_argument("--model", default="scribe_v2", help="Model ID (domyślnie scribe_v2)")
     t.add_argument(
-        "--language", default=None,
+        "--model", default="scribe_v2", help="Model ID (domyślnie scribe_v2)"
+    )
+    t.add_argument(
+        "--language",
+        default=None,
         help="Kod języka ISO (np. 'pl', 'en'). Pozostaw puste dla auto-detekcji.",
     )
     t.add_argument(
-        "--save-raw", type=Path, default=None,
+        "--save-raw",
+        type=Path,
+        default=None,
         help="Zapisz raw response (JSON) — potrzebne dla pipeline'u hybrid.",
     )
 
@@ -102,11 +117,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gt.add_argument("timeline", type=Path, help="Ścieżka do speaker-timeline-*.json")
     gt.add_argument(
-        "-p", "--participants", type=Path, default=None,
+        "-p",
+        "--participants",
+        type=Path,
+        default=None,
         help="Opcjonalny plik participants-*.json (oznacza hosta)",
     )
     gt.add_argument(
-        "-o", "--output", type=Path, default=None,
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
         help="Plik wyjściowy (domyślnie stdout)",
     )
 
@@ -120,25 +141,51 @@ def _build_parser() -> argparse.ArgumentParser:
             "overlapie czasowym."
         ),
     )
-    cmp_.add_argument("--timeline", type=Path, required=True,
-                      help="speaker-timeline-*.json (ground-truth)")
-    cmp_.add_argument("--elevenlabs", type=Path, action="append", default=[],
-                      help="output naszego pipeline (Rozmówca N [HH:mm:ss] ...). "
-                           "Można podać wielokrotnie.")
-    cmp_.add_argument("--macwhisper", type=Path, action="append", default=[],
-                      help="export MacWhisper (txt). Można podać wielokrotnie.")
-    cmp_.add_argument("--fireflies", type=Path, action="append", default=[],
-                      help="export Fireflies (json). Można podać wielokrotnie.")
     cmp_.add_argument(
-        "--alias", action="append", default=[],
+        "--timeline",
+        type=Path,
+        required=True,
+        help="speaker-timeline-*.json (ground-truth)",
+    )
+    cmp_.add_argument(
+        "--elevenlabs",
+        type=Path,
+        action="append",
+        default=[],
+        help="output naszego pipeline (Rozmówca N [HH:mm:ss] ...). "
+        "Można podać wielokrotnie.",
+    )
+    cmp_.add_argument(
+        "--macwhisper",
+        type=Path,
+        action="append",
+        default=[],
+        help="export MacWhisper (txt). Można podać wielokrotnie.",
+    )
+    cmp_.add_argument(
+        "--fireflies",
+        type=Path,
+        action="append",
+        default=[],
+        help="export Fireflies (json). Można podać wielokrotnie.",
+    )
+    cmp_.add_argument(
+        "--alias",
+        action="append",
+        default=[],
         help=(
             "Scal dwa GT speakery w jedną osobę: 'OryginalnyImię=Canonical'. "
             "Np. --alias 'Alex=alex smith' (ta sama osoba na 2 urządzeniach). "
             "Można podać wielokrotnie."
         ),
     )
-    cmp_.add_argument("-o", "--output", type=Path, default=None,
-                      help="Plik wyjściowy (domyślnie stdout)")
+    cmp_.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Plik wyjściowy (domyślnie stdout)",
+    )
 
     # transcribe-cloud
     tc_cloud = sub.add_parser(
@@ -146,8 +193,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Zleć ASR na Replicate (Whisper-large-v3 turbo). Output kompatybilny z `hybrid --elevenlabs-raw`.",
     )
     tc_cloud.add_argument("audio", type=Path)
-    tc_cloud.add_argument("-o", "--output", type=Path, required=True,
-                          help="JSON output (kompatybilny z hybrid --elevenlabs-raw)")
+    tc_cloud.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="JSON output (kompatybilny z hybrid --elevenlabs-raw)",
+    )
     tc_cloud.add_argument("--model", default=DEFAULT_ASR_MODEL)
     tc_cloud.add_argument("--language", default="english")
     tc_cloud.add_argument("--audio-field", default="audio")
@@ -162,15 +214,31 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     dc.add_argument("audio", type=Path, help="Plik audio/wideo")
-    dc.add_argument("-o", "--output", type=Path, required=True,
-                    help="JSON output (np. output/spotkanie.replicate.json)")
-    dc.add_argument("--model", default=DEFAULT_MODEL,
-                    help=f"Replicate model:version (domyślnie {DEFAULT_MODEL})")
-    dc.add_argument("-n", "--num-speakers", type=int, default=None,
-                    help="Sztywna liczba mówców (jeśli model przyjmuje)")
-    dc.add_argument("--audio-field", default="audio",
-                    help="Nazwa pola input dla audio (zwykle 'audio', "
-                         "czasem 'audio_file' albo 'file')")
+    dc.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="JSON output (np. output/spotkanie.replicate.json)",
+    )
+    dc.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"Replicate model:version (domyślnie {DEFAULT_MODEL})",
+    )
+    dc.add_argument(
+        "-n",
+        "--num-speakers",
+        type=int,
+        default=None,
+        help="Sztywna liczba mówców (jeśli model przyjmuje)",
+    )
+    dc.add_argument(
+        "--audio-field",
+        default="audio",
+        help="Nazwa pola input dla audio (zwykle 'audio', "
+        "czasem 'audio_file' albo 'file')",
+    )
 
     # hybrid
     h = sub.add_parser(
@@ -183,22 +251,27 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     h.add_argument(
-        "--elevenlabs-raw", type=Path, required=True,
+        "--elevenlabs-raw",
+        type=Path,
+        required=True,
         help="JSON z transcribe --save-raw (best: --no-diarize żeby tekst był najczystszy)",
     )
     diar_g = h.add_mutually_exclusive_group(required=True)
     diar_g.add_argument(
-        "--macwhisper", type=Path,
+        "--macwhisper",
+        type=Path,
         help="Źródło diaryzacji: txt z MacWhisper/Parakeet",
     )
     diar_g.add_argument(
-        "--ground-truth", type=Path,
+        "--ground-truth",
+        type=Path,
         help="Źródło diaryzacji: speaker-timeline-*.json (idealny benchmark)",
     )
     h.add_argument(
-        "--real-names", action="store_true",
+        "--real-names",
+        action="store_true",
         help="Użyj oryginalnych etykiet speakerów (np. imion z ground-truth) "
-             "zamiast anonimowego 'Rozmówca N'.",
+        "zamiast anonimowego 'Rozmówca N'.",
     )
     h.add_argument("-o", "--output", type=Path, default=None)
 
@@ -215,7 +288,9 @@ def _build_parser() -> argparse.ArgumentParser:
     tc.add_argument("--macwhisper", type=Path, action="append", default=[])
     tc.add_argument("--fireflies", type=Path, action="append", default=[])
     tc.add_argument(
-        "--window", action="append", default=[],
+        "--window",
+        action="append",
+        default=[],
         help=(
             "Wytnij fragment do side-by-side w formacie 'MM:SS-MM:SS'. "
             "Można podać wielokrotnie. Domyślnie 3 fragmenty: początek, środek, koniec."
@@ -240,38 +315,49 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     pr.add_argument(
-        "rec_dir", type=Path,
+        "rec_dir",
+        type=Path,
         help="Katalog nagrania z recall-fetch (<bot_id>/<recording_id>)",
     )
     pr.add_argument(
-        "-o", "--output", type=Path, required=True,
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
         help="Finalny transkrypt (np. output/spotkanie.txt)",
     )
     pr.add_argument(
-        "--model", default="scribe_v2",
+        "--model",
+        default="scribe_v2",
         help="ElevenLabs model (domyślnie scribe_v2)",
     )
     pr.add_argument(
-        "--language", default=None,
+        "--language",
+        default=None,
         help="Kod języka ISO dla ASR (domyślnie: auto, tiebreak bierze "
-             "language_code z raw.json)",
+        "language_code z raw.json)",
     )
     pr.add_argument(
-        "--no-tiebreak", action="store_true",
+        "--no-tiebreak",
+        action="store_true",
         help="Bez mini-ASR spornych okien (szybciej/taniej, minimalnie gorzej "
-             "na overlapach)",
+        "na overlapach)",
     )
     pr.add_argument(
-        "--no-overlap-recovery", action="store_true",
+        "--no-overlap-recovery",
+        action="store_true",
         help="Bez odzysku słów cichszego mówcy przy overlapie (mini-ASR okien "
-             "z energią kanału bez przypisanych słów; domyślnie włączony)",
+        "z energią kanału bez przypisanych słów; domyślnie włączony)",
     )
     pr.add_argument(
-        "--raw-out", type=Path, default=None,
+        "--raw-out",
+        type=Path,
+        default=None,
         help="Override ścieżki raw.json (domyślnie <output-stem>.raw.json)",
     )
     pr.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Ignoruj istniejący raw.json i transkrybuj od zera.",
     )
 
@@ -289,27 +375,37 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pipe.add_argument("audio", type=Path, help="Plik audio/wideo")
     pipe.add_argument(
-        "-o", "--output", type=Path, required=True,
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
         help="Finalny transkrypt (np. output/spotkanie.txt)",
     )
     pipe.add_argument(
-        "-n", "--num-speakers", type=int, default=None,
+        "-n",
+        "--num-speakers",
+        type=int,
+        default=None,
         help="Sztywna liczba mówców dla diaryzacji (przekazana do Replicate)",
     )
     pipe.add_argument(
-        "--language", default=None,
+        "--language",
+        default=None,
         help="Kod języka ISO dla ElevenLabs (np. 'pl'). Domyślnie auto.",
     )
     pipe.add_argument(
-        "--real-names", action="store_true",
+        "--real-names",
+        action="store_true",
         help="Zachowaj oryginalne etykiety speakerów (SPEAKER_00...) zamiast 'Rozmówca N'.",
     )
     pipe.add_argument(
-        "--model", default="scribe_v2",
+        "--model",
+        default="scribe_v2",
         help="ElevenLabs model (domyślnie scribe_v2)",
     )
     pipe.add_argument(
-        "--diarizer", choices=list(DIARIZER_BACKENDS.keys()),
+        "--diarizer",
+        choices=list(DIARIZER_BACKENDS.keys()),
         default=None,
         help=(
             "Backend diaryzacji (Replicate). "
@@ -323,30 +419,40 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     pipe.add_argument(
-        "--speaker-timeline", type=Path, default=None,
+        "--speaker-timeline",
+        type=Path,
+        default=None,
         help="Użyj gotowego speaker-timeline.json (np. z Recall) jako źródła "
-             "diaryzacji zamiast Replicate. Bez tego auto-wykrywa plik obok audio.",
+        "diaryzacji zamiast Replicate. Bez tego auto-wykrywa plik obok audio.",
     )
     pipe.add_argument(
-        "--diarize-model", default=None,
+        "--diarize-model",
+        default=None,
         help="Advanced: override konkretnego Replicate model:version dla wybranego "
-             "diarizera (np. fork tej samej rodziny). Zwykle używaj --diarizer.",
+        "diarizera (np. fork tej samej rodziny). Zwykle używaj --diarizer.",
     )
     pipe.add_argument(
-        "--audio-out", type=Path, default=None,
+        "--audio-out",
+        type=Path,
+        default=None,
         help="Override ścieżki wyekstrahowanego audio (gdy input to wideo). "
-             "Domyślnie <output-stem>.audio.m4a",
+        "Domyślnie <output-stem>.audio.m4a",
     )
     pipe.add_argument(
-        "--raw-out", type=Path, default=None,
+        "--raw-out",
+        type=Path,
+        default=None,
         help="Override ścieżki raw.json (domyślnie <output-stem>.raw.json)",
     )
     pipe.add_argument(
-        "--timeline-out", type=Path, default=None,
+        "--timeline-out",
+        type=Path,
+        default=None,
         help="Override ścieżki timeline.json (domyślnie <output-stem>.timeline.json)",
     )
     pipe.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Ignoruj istniejące intermediate pliki i zrób wszystko od zera.",
     )
 
@@ -367,38 +473,52 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     one.add_argument("audio", type=Path, help="Plik audio/wideo")
     one.add_argument(
-        "-o", "--output", type=Path, required=True,
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
         help="Finalny transkrypt",
     )
     one.add_argument(
-        "-n", "--num-speakers", type=int, default=None,
+        "-n",
+        "--num-speakers",
+        type=int,
+        default=None,
         help="Sztywna liczba mówców (NeMo MSDD trzyma się tego twardo)",
     )
     one.add_argument(
-        "--language", default=None,
+        "--language",
+        default=None,
         help="Kod języka ISO (np. 'pl'). Domyślnie auto-detect Whisper'a.",
     )
     one.add_argument(
-        "--prompt", default=None,
+        "--prompt",
+        default=None,
         help=(
             "Vocabulary hint dla Whispera — nazwy własne, akronimy z "
             "interpunkcją. Np. 'Acme, Anna Nowak, Jan Kowalski.'"
         ),
     )
     one.add_argument(
-        "--real-names", action="store_true",
+        "--real-names",
+        action="store_true",
         help="Zachowaj SPEAKER_00... zamiast 'Rozmówca N'.",
     )
     one.add_argument(
-        "--audio-out", type=Path, default=None,
+        "--audio-out",
+        type=Path,
+        default=None,
         help="Override ścieżki wyekstrahowanego audio (gdy input to wideo).",
     )
     one.add_argument(
-        "--raw-out", type=Path, default=None,
+        "--raw-out",
+        type=Path,
+        default=None,
         help="Override ścieżki raw response JSON (domyślnie <stem>.oneshot.json)",
     )
     one.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Ignoruj istniejące intermediate pliki.",
     )
 
@@ -417,51 +537,66 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     rf.add_argument(
-        "bot_ids", nargs="*",
+        "bot_ids",
+        nargs="*",
         help="Konkretne bot_id do pobrania. Jeśli puste — bierze wszystkie "
-             "boty z workspace'u (filtrowane przez --status).",
+        "boty z workspace'u (filtrowane przez --status).",
     )
     rf.add_argument(
-        "-o", "--output-dir", type=Path, default=Path("output/recall"),
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=Path("output/recall"),
         help="Katalog wyjściowy (domyślnie output/recall)",
     )
     rf.add_argument(
-        "--api-key", default=None,
+        "--api-key",
+        default=None,
         help="Recall API key (override RECALL_API_KEY z env)",
     )
     rf.add_argument(
-        "--region", default=None, choices=list(VALID_REGIONS),
+        "--region",
+        default=None,
+        choices=list(VALID_REGIONS),
         help=f"Recall region (override RECALL_REGION). Default: {DEFAULT_REGION}",
     )
     rf.add_argument(
-        "--status", action="append", default=None,
+        "--status",
+        action="append",
+        default=None,
         help="Filtr statusu botów dla list-all (np. 'done', 'recording_done'). "
-             "Można podać wielokrotnie. Bez tego — wszystkie statusy. "
-             "Ignorowane gdy podajesz konkretne bot_ids.",
+        "Można podać wielokrotnie. Bez tego — wszystkie statusy. "
+        "Ignorowane gdy podajesz konkretne bot_ids.",
     )
     rf.add_argument(
-        "--meeting-url", default=None,
+        "--meeting-url",
+        default=None,
         help="Filtr po meeting_url (tylko gdy nie podajesz bot_ids).",
     )
     rf.add_argument(
-        "--no-mixed", action="store_true",
+        "--no-mixed",
+        action="store_true",
         help="Nie pobieraj audio_mixed (tylko per-participant).",
     )
     rf.add_argument(
-        "--no-separate", action="store_true",
+        "--no-separate",
+        action="store_true",
         help="Nie pobieraj audio_separate (tylko mixed).",
     )
     rf.add_argument(
-        "--no-events", action="store_true",
+        "--no-events",
+        action="store_true",
         help="Nie pobieraj participant_events (speaker-timeline.json, "
-             "participants.json, participant-events.json).",
+        "participants.json, participant-events.json).",
     )
     rf.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Re-download nawet jeśli plik już istnieje.",
     )
     rf.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Tylko wypisz co byłoby pobrane (bez pobierania).",
     )
 
@@ -479,11 +614,14 @@ def _build_parser() -> argparse.ArgumentParser:
         )
         rp.add_argument("bot_id", help="Bot ID (UUID) do sterowania nagrywaniem.")
         rp.add_argument(
-            "--api-key", default=None,
+            "--api-key",
+            default=None,
             help="Recall API key (override RECALL_API_KEY z env)",
         )
         rp.add_argument(
-            "--region", default=None, choices=list(VALID_REGIONS),
+            "--region",
+            default=None,
+            choices=list(VALID_REGIONS),
             help=f"Recall region (override RECALL_REGION). Default: {DEFAULT_REGION}",
         )
 
@@ -560,6 +698,7 @@ def _cmd_transcribe_cloud(args: argparse.Namespace) -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
+
     args.output.write_text(_json.dumps(result, indent=2), encoding="utf-8")
     print(
         f"Wrote {len(result['words'])} words to {args.output}",
@@ -681,8 +820,10 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     aliases: dict[str, str] = {}
     for spec in args.alias:
         if "=" not in spec:
-            print(f"ERROR: --alias musi mieć format 'A=B', dostałem {spec!r}",
-                  file=sys.stderr)
+            print(
+                f"ERROR: --alias musi mieć format 'A=B', dostałem {spec!r}",
+                file=sys.stderr,
+            )
             return 2
         src, dst = spec.split("=", 1)
         aliases[src.strip()] = dst.strip()
@@ -698,8 +839,10 @@ def _cmd_compare(args: argparse.Namespace) -> int:
         candidates[_short_label(path, "ff")] = load_fireflies(path)
 
     if not candidates:
-        print("ERROR: brak kandydatów (--elevenlabs/--macwhisper/--fireflies)",
-              file=sys.stderr)
+        print(
+            "ERROR: brak kandydatów (--elevenlabs/--macwhisper/--fireflies)",
+            file=sys.stderr,
+        )
         return 2
 
     text = format_report(gt, candidates)
@@ -711,14 +854,26 @@ def _has_video_stream(path: Path) -> bool:
     """True jeśli plik zawiera stream video (czyli warto wyciągnąć samo audio)."""
     import shutil
     import subprocess
+
     if not shutil.which("ffprobe"):
         return False
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_type", "-of", "csv=p=0",
-             str(path)],
-            capture_output=True, text=True, timeout=15,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         return "video" in result.stdout
     except (OSError, subprocess.SubprocessError):
@@ -729,6 +884,7 @@ def _extract_audio(video_path: Path, out_path: Path) -> None:
     """Wyciągnij audio bez transkodowania (-acodec copy). Fallback do mp3 jeśli copy się wywali."""
     import shutil
     import subprocess
+
     if not shutil.which("ffmpeg"):
         raise RuntimeError(
             "ffmpeg nie znaleziony w PATH. `brew install ffmpeg` "
@@ -736,8 +892,16 @@ def _extract_audio(video_path: Path, out_path: Path) -> None:
         )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-acodec", "copy",
-         str(out_path)],
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-acodec",
+            "copy",
+            str(out_path),
+        ],
         capture_output=True,
     )
     if result.returncode == 0:
@@ -750,9 +914,20 @@ def _extract_audio(video_path: Path, out_path: Path) -> None:
         file=sys.stderr,
     )
     result = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video_path), "-vn",
-         "-acodec", "libmp3lame", "-b:a", "96k", "-ac", "1",
-         str(mp3_path)],
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-b:a",
+            "96k",
+            "-ac",
+            "1",
+            str(mp3_path),
+        ],
         capture_output=True,
     )
     if result.returncode != 0:
@@ -801,7 +976,7 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
             _extract_audio(args.audio, extracted)
             audio_path = extracted if extracted.exists() else mp3_alt
             print(
-                f"      {audio_path.stat().st_size / (1024*1024):.1f} MB",
+                f"      {audio_path.stat().st_size / (1024 * 1024):.1f} MB",
                 file=sys.stderr,
             )
 
@@ -905,13 +1080,14 @@ def _cmd_oneshot(args: argparse.Namespace) -> int:
             _extract_audio(args.audio, extracted)
             audio_path = extracted if extracted.exists() else mp3_alt
             print(
-                f"      {audio_path.stat().st_size / (1024*1024):.1f} MB",
+                f"      {audio_path.stat().st_size / (1024 * 1024):.1f} MB",
                 file=sys.stderr,
             )
 
     if raw_path.exists() and not args.force:
         print(f"[1/2] Reuse oneshot response: {raw_path}", file=sys.stderr)
         import json as _json
+
         response = _json.loads(raw_path.read_text())
     else:
         print(
@@ -934,6 +1110,7 @@ def _cmd_oneshot(args: argparse.Namespace) -> int:
             return 1
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         import json as _json
+
         raw_path.write_text(_json.dumps(response, indent=2), encoding="utf-8")
         print(
             f"      {response.get('num_speakers', '?')} mówców, "
@@ -969,10 +1146,12 @@ def _cmd_recall_fetch(args: argparse.Namespace) -> int:
         bot_ids = list(args.bot_ids)
     else:
         print("Pobieranie listy botów...", file=sys.stderr)
-        bots = list(client.list_bots(
-            status=args.status,
-            meeting_url=args.meeting_url,
-        ))
+        bots = list(
+            client.list_bots(
+                status=args.status,
+                meeting_url=args.meeting_url,
+            )
+        )
         bot_ids = [b["id"] for b in bots]
         print(f"  → znaleziono {len(bot_ids)} botów", file=sys.stderr)
 
@@ -992,11 +1171,14 @@ def _cmd_recall_fetch(args: argparse.Namespace) -> int:
             for rec in assets:
                 mixed = len(rec.audio_mixed)
                 parts = sum(len(a.parts) for a in rec.audio_separate)
-                events = sum(bool(u) for u in (
-                    rec.speaker_timeline_url,
-                    rec.participants_url,
-                    rec.participant_events_url,
-                ))
+                events = sum(
+                    bool(u)
+                    for u in (
+                        rec.speaker_timeline_url,
+                        rec.participants_url,
+                        rec.participant_events_url,
+                    )
+                )
                 print(
                     f"  rec {rec.recording_id} expires={rec.expires_at} "
                     f"mixed={mixed} separate_parts={parts} events={events}"
@@ -1043,8 +1225,8 @@ def _cmd_recall_fetch(args: argparse.Namespace) -> int:
             f"{s['separate_parts_downloaded']} new / "
             f"{s['separate_parts_skipped']} skip, events: "
             f"{s['events_downloaded']} new / {s['events_skipped']} skip, "
-            f"{s['bytes'] / (1024*1024):.1f} MB"
-            + (f", errors={len(s['errors'])}" if s['errors'] else ''),
+            f"{s['bytes'] / (1024 * 1024):.1f} MB"
+            + (f", errors={len(s['errors'])}" if s["errors"] else ""),
             file=sys.stderr,
         )
 
@@ -1055,8 +1237,8 @@ def _cmd_recall_fetch(args: argparse.Namespace) -> int:
         f"{totals['separate_parts_skipped']} skip, "
         f"events {totals['events_downloaded']} new / "
         f"{totals['events_skipped']} skip, "
-        f"{totals['bytes'] / (1024*1024):.1f} MB"
-        + (f", errors={totals['errors']}" if totals['errors'] else ''),
+        f"{totals['bytes'] / (1024 * 1024):.1f} MB"
+        + (f", errors={totals['errors']}" if totals["errors"] else ""),
         file=sys.stderr,
     )
     return 1 if totals["errors"] else 0

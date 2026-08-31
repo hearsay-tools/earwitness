@@ -10,8 +10,7 @@ import datetime as dt
 
 import pytest
 from sqlalchemy import select
-
-from webapp.models import Meeting, USER_STATUS_ORDER, utcnow, user_status_case
+from webapp.models import USER_STATUS_ORDER, Meeting, user_status_case, utcnow
 
 
 def _m(**kw) -> Meeting:
@@ -29,29 +28,51 @@ def _m(**kw) -> Meeting:
 
 # (nazwa, pola nadpisujące _m(), oczekiwany status)
 CASES = [
-    ("transcript ready wygrywa ze wszystkim",
-     dict(status_group="failed", transcript_state="ready", asset_state="failed"), "ready"),
+    (
+        "transcript ready wygrywa ze wszystkim",
+        dict(status_group="failed", transcript_state="ready", asset_state="failed"),
+        "ready",
+    ),
     ("scheduled", dict(status_group="scheduled", recording_id=None), "upcoming"),
     ("joining", dict(status_group="joining", recording_id=None), "in_meeting"),
     ("recording", dict(status_group="recording", recording_id=None), "in_meeting"),
     ("bot failed", dict(status_group="failed", recording_id=None), "failed"),
-    ("transcript failed mimo assets na dysku",
-     dict(transcript_state="failed", asset_state="ready"), "failed"),
+    (
+        "transcript failed mimo assets na dysku",
+        dict(transcript_state="failed", asset_state="ready"),
+        "failed",
+    ),
     ("asset failed", dict(asset_state="failed"), "failed"),
     ("asset fetching", dict(asset_state="fetching"), "processing"),
     ("transcript queued", dict(transcript_state="queued"), "processing"),
-    ("transcript running z assets na dysku",
-     dict(transcript_state="running", asset_state="ready"), "processing"),
+    (
+        "transcript running z assets na dysku",
+        dict(transcript_state="running", asset_state="ready"),
+        "processing",
+    ),
     ("done + assets na dysku", dict(asset_state="ready"), "to_process"),
-    ("expired + assets na dysku (dysk jest źródłem prawdy)",
-     dict(status_group="expired", asset_state="ready"), "to_process"),
+    (
+        "expired + assets na dysku (dysk jest źródłem prawdy)",
+        dict(status_group="expired", asset_state="ready"),
+        "to_process",
+    ),
     ("done + recording, media bez TTL", dict(), "to_process"),
-    ("done + recording, media żyje",
-     dict(media_expires_at=utcnow() + dt.timedelta(hours=2)), "to_process"),
-    ("done + recording, media wygasło",
-     dict(media_expires_at=utcnow() - dt.timedelta(hours=2)), "no_recording"),
+    (
+        "done + recording, media żyje",
+        dict(media_expires_at=utcnow() + dt.timedelta(hours=2)),
+        "to_process",
+    ),
+    (
+        "done + recording, media wygasło",
+        dict(media_expires_at=utcnow() - dt.timedelta(hours=2)),
+        "no_recording",
+    ),
     ("done bez nagrania", dict(recording_id=None), "no_recording"),
-    ("expired bez assetów", dict(status_group="expired", recording_id=None), "no_recording"),
+    (
+        "expired bez assetów",
+        dict(status_group="expired", recording_id=None),
+        "no_recording",
+    ),
 ]
 
 

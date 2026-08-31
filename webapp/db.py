@@ -38,7 +38,9 @@ if _is_sqlite:
         cur.close()
 
 
-SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False, future=True)
+SessionLocal = sessionmaker(
+    bind=engine, class_=Session, expire_on_commit=False, future=True
+)
 
 
 def init_db() -> None:

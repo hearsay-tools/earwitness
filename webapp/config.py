@@ -48,7 +48,9 @@ class Settings:
     google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "")
     google_client_secret: str = os.environ.get("GOOGLE_CLIENT_SECRET", "")
     # Puste = każda domena Google. Lista rozdzielona przecinkami = whitelist.
-    allowed_domains: list[str] = field(default_factory=lambda: _csv("ALLOWED_GOOGLE_DOMAINS"))
+    allowed_domains: list[str] = field(
+        default_factory=lambda: _csv("ALLOWED_GOOGLE_DOMAINS")
+    )
     # Wyłącznik auth do lokalnego devu (NIE włączać na deployu).
     auth_disabled: bool = _bool("AUTH_DISABLED", False)
 

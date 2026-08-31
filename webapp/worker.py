@@ -28,7 +28,6 @@ from webapp import tasks  # noqa: F401 — rejestracja tasków w dekoratorach
 from webapp.config import settings
 from webapp.db import init_db, session_scope
 from webapp.jobs import claim, enqueue, reap_stale, release_orphaned_meetings, run_job
-from webapp.models import utcnow
 
 log = logging.getLogger("webapp.worker")
 
@@ -63,7 +62,12 @@ def worker_loop(slot: int, kinds: Optional[list[str]] = None) -> None:
                     log.info("job %s: %s (%s)", job.id, job.kind, job.meeting_id or "-")
                     t0 = time.perf_counter()
                     run_job(session, job)
-                    log.info("job %s: %s w %.1fs", job.id, job.status, time.perf_counter() - t0)
+                    log.info(
+                        "job %s: %s w %.1fs",
+                        job.id,
+                        job.status,
+                        time.perf_counter() - t0,
+                    )
                     idle_since = time.monotonic()
                     continue
         except Exception:  # noqa: BLE001 — pętla workera nie może umrzeć
@@ -124,15 +128,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Worker kolejki zadań (fetch z Recall + pipeline transkrypcji).",
     )
     p.add_argument(
-        "-c", "--concurrency", type=int, default=settings.worker_concurrency,
+        "-c",
+        "--concurrency",
+        type=int,
+        default=settings.worker_concurrency,
         help=f"Ile równoległych procesów (default {settings.worker_concurrency}).",
     )
     p.add_argument(
-        "--kinds", default=None,
+        "--kinds",
+        default=None,
         help="Ogranicz do typów zadań (przecinkami), np. 'process,transcribe'.",
     )
     p.add_argument(
-        "--once", action="store_true",
+        "--once",
+        action="store_true",
         help="Wykonaj jedno zadanie i wyjdź (do debugowania).",
     )
     args = p.parse_args(argv)
@@ -162,10 +171,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     ctx = mp.get_context("spawn")
     children: list[mp.Process] = []
     for slot in range(max(1, args.concurrency)):
-        c = ctx.Process(target=worker_loop, args=(slot, kinds), name=f"worker-{slot}", daemon=False)
+        c = ctx.Process(
+            target=worker_loop, args=(slot, kinds), name=f"worker-{slot}", daemon=False
+        )
         c.start()
         children.append(c)
-    log.info("wystartowało %d workerów, autosync co %ss", len(children), settings.autosync_interval)
+    log.info(
+        "wystartowało %d workerów, autosync co %ss",
+        len(children),
+        settings.autosync_interval,
+    )
 
     try:
         scheduler_loop(children)
