@@ -56,6 +56,14 @@
   </div>
 {%- endmacro %}
 
+{# ---------- pobieranie nagrania ----------
+   Mixed MP3 do odsłuchu. Wywołujący pokazuje kontrolkę tylko wtedy,
+   gdy plik fizycznie leży na dysku — po cleanup_audio znika. #}
+{% macro recording_download(meeting, size='btn-sm') -%}
+  <a class="btn btn-line {{ size }}" href="/meetings/{{ meeting.id }}/recording"
+     title="Mixed MP3 recording">Recording .mp3</a>
+{%- endmacro %}
+
 {# ---------- paginacja ---------- #}
 {% macro pager(page, pages, base) -%}
   {% if pages > 1 %}

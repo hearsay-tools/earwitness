@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -469,6 +470,7 @@ def meeting_detail(
             "jobs": jobs,
             "transcript": transcript,
             "preview": preview,
+            "has_recording": _mixed_recording(meeting) is not None,
         },
     )
 
@@ -564,6 +566,28 @@ def _get_transcript(session: Session, transcript_id: int) -> Transcript:
     return t
 
 
+def _download_stem(meeting: Meeting) -> str:
+    """Wspólny rdzeń nazwy pobieranych plików: {data}-{tytuł}."""
+    slug = "".join(
+        c if c.isalnum() or c in "-_" else "-" for c in (meeting.title or "meeting")
+    )[:80]
+    when = (
+        meeting.occurred_at.strftime("%Y-%m-%d") if meeting.occurred_at else "no-date"
+    )
+    return f"{when}-{slug}".strip("-")
+
+
+def _mixed_recording(meeting: Meeting) -> Optional[Path]:
+    """Mixed MP3 spotkania — dysk jest źródłem prawdy, nie Recall ani flagi w bazie."""
+    if not meeting.asset_dir:
+        return None
+    rec_dir = Path(meeting.asset_dir)
+    for path in sorted(rec_dir.glob("audio_mixed*.mp3")):
+        if path.is_file() and path.resolve().parent == rec_dir.resolve():
+            return path
+    return None
+
+
 @app.get("/transcripts/{transcript_id}", response_class=HTMLResponse)
 def transcript_view(
     request: Request,
@@ -603,13 +627,7 @@ def transcript_download(
     except FileNotFoundError as e:
         raise HTTPException(410, str(e)) from e
 
-    slug = "".join(
-        c if c.isalnum() or c in "-_" else "-" for c in (meeting.title or "meeting")
-    )[:80]
-    when = (
-        meeting.occurred_at.strftime("%Y-%m-%d") if meeting.occurred_at else "no-date"
-    )
-    stem = f"{when}-{slug}".strip("-")
+    stem = _download_stem(meeting)
 
     if fmt == "txt":
         body, media, ext = text, "text/plain; charset=utf-8", "txt"
@@ -667,6 +685,28 @@ def transcript_download(
         content=body,
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{stem}.{ext}"'},
+    )
+
+
+@app.get("/meetings/{meeting_id}/recording")
+def meeting_recording_download(
+    meeting_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Pobranie mixed MP3 — stream, bo nagranie waży setki MB."""
+    meeting = session.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "No such meeting")
+    path = _mixed_recording(meeting)
+    if path is None:
+        raise HTTPException(404, "No mixed recording on disk")
+    # `filename=` (nie własny nagłówek): Starlette robi RFC 5987, więc tytuł
+    # z diakrytykami nie wywala kodowania Latin-1 w nagłówkach.
+    return FileResponse(
+        path,
+        media_type="audio/mpeg",
+        filename=f"{_download_stem(meeting)}.mp3",
     )
 
 

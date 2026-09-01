@@ -380,6 +380,85 @@ def test_expired_media_is_explained(client, session, meeting):
 
 
 # --------------------------------------------------------------------------
+# Nagranie: pobieranie mixed MP3
+# --------------------------------------------------------------------------
+
+
+def _seed_mixed_audio(session, meeting, tmp_path):
+    rec_dir = tmp_path / "rec"
+    rec_dir.mkdir()
+    (rec_dir / "audio_mixed.mp3").write_bytes(b"fake-mp3-bytes")
+    meeting.asset_dir = str(rec_dir)
+    meeting.asset_state = "ready"
+    session.commit()
+
+
+def test_recording_download_streams_mixed_mp3(client, session, meeting, tmp_path):
+    _seed_mixed_audio(session, meeting, tmp_path)
+
+    r = client.get(f"/meetings/{meeting.id}/recording")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/mpeg")
+    assert r.headers["content-disposition"] == (
+        'attachment; filename="2026-08-01-Sales-Review.mp3"'
+    )
+    assert r.content == b"fake-mp3-bytes"
+
+
+def test_recording_download_404_when_mixed_file_missing(
+    client, session, meeting, tmp_path
+):
+    rec_dir = tmp_path / "rec"
+    rec_dir.mkdir()
+    meeting.asset_dir = str(rec_dir)
+    meeting.asset_state = "ready"
+    session.commit()
+
+    r = client.get(f"/meetings/{meeting.id}/recording")
+    assert r.status_code == 404
+
+
+def test_recording_download_404_without_asset_dir_or_meeting(client, session, meeting):
+    r = client.get(f"/meetings/{meeting.id}/recording")
+    assert r.status_code == 404
+    assert client.get("/meetings/nie-ma/recording").status_code == 404
+
+
+def test_recording_download_handles_non_ascii_titles(
+    client, session, meeting, tmp_path
+):
+    """Nagłówek koduje się w Latin-1 — tytuł z diakrytykami nie może zwalić 500."""
+    _seed_mixed_audio(session, meeting, tmp_path)
+    meeting.title = "Łódź Review"
+    session.commit()
+
+    r = client.get(f"/meetings/{meeting.id}/recording")
+    assert r.status_code == 200
+    assert "filename*=utf-8''" in r.headers["content-disposition"]
+    assert r.content == b"fake-mp3-bytes"
+
+
+def test_meeting_detail_offers_recording_download_when_file_present(
+    client, session, meeting, tmp_path
+):
+    _seed_mixed_audio(session, meeting, tmp_path)
+
+    r = client.get(f"/meetings/{meeting.id}", headers=HTML)
+    assert 'href="/meetings/bot-1/recording"' in r.text
+    # Ten sam wygląd co pobieranie transkryptów — btn-line w rozmiarze btn-sm.
+    assert 'class="btn btn-line btn-sm" href="/meetings/bot-1/recording"' in r.text
+
+
+def test_meeting_detail_hides_recording_download_when_file_missing(
+    client, session, meeting
+):
+    r = client.get(f"/meetings/{meeting.id}", headers=HTML)
+    assert 'href="/meetings/bot-1/recording"' not in r.text
+    # Kontrolka nie istnieje, a nie jest wyszarzona — dead link to pułapka.
+    assert "/recording" not in r.text
+
+
+# --------------------------------------------------------------------------
 # Dostępność prezentacji
 # --------------------------------------------------------------------------
 
