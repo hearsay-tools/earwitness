@@ -701,12 +701,12 @@ def meeting_recording_download(
     path = _mixed_recording(meeting)
     if path is None:
         raise HTTPException(404, "No mixed recording on disk")
+    # `filename=` (nie własny nagłówek): Starlette robi RFC 5987, więc tytuł
+    # z diakrytykami nie wywala kodowania Latin-1 w nagłówkach.
     return FileResponse(
         path,
         media_type="audio/mpeg",
-        headers={
-            "Content-Disposition": f'attachment; filename="{_download_stem(meeting)}.mp3"'
-        },
+        filename=f"{_download_stem(meeting)}.mp3",
     )
 
 

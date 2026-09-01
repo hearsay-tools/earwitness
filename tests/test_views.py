@@ -424,6 +424,20 @@ def test_recording_download_404_without_asset_dir_or_meeting(client, session, me
     assert client.get("/meetings/nie-ma/recording").status_code == 404
 
 
+def test_recording_download_handles_non_ascii_titles(
+    client, session, meeting, tmp_path
+):
+    """Nagłówek koduje się w Latin-1 — tytuł z diakrytykami nie może zwalić 500."""
+    _seed_mixed_audio(session, meeting, tmp_path)
+    meeting.title = "Łódź Review"
+    session.commit()
+
+    r = client.get(f"/meetings/{meeting.id}/recording")
+    assert r.status_code == 200
+    assert "filename*=utf-8''" in r.headers["content-disposition"]
+    assert r.content == b"fake-mp3-bytes"
+
+
 def test_meeting_detail_offers_recording_download_when_file_present(
     client, session, meeting, tmp_path
 ):
