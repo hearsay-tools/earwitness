@@ -14,25 +14,30 @@
       {%- if m.calendar_html_link %} · <a href="{{ m.calendar_html_link }}" rel="noopener" target="_blank">in calendar</a>{% endif %}
     </p>
   </div>
-  {# Jeden przycisk, bo użytkownik ma jedną intencję: chcę tekst tego
-     spotkania. Który etap trzeba odpalić (pobranie, ASR, diaryzacja) wie
-     `process` — pobieranie pomija komplet na dysku, ASR reużywa raw.json.
-     Jedyny wybór, który naprawdę należy do człowieka, to „czy zapłacić za
-     ASR jeszcze raz” — i ten wybór ma własne potwierdzenie, nie modyfikator. #}
-  <form method="post" action="/meetings/{{ m.id }}/enqueue" class="row" data-busy-form>
-    {% if m.recording_id %}
-      {% if m.transcript_state == 'ready' %}
-        <input type="hidden" name="force_asr" value="true">
-        <button class="btn btn-primary" name="kind" value="process"
-                data-busy-label="Queueing…" data-confirm="redo-confirm">Redo transcript</button>
+  {# Jeden przycisk primary, bo użytkownik ma jedną główną intencję: chcę
+     tekst tego spotkania. Który etap trzeba odpalić (pobranie, ASR,
+     diaryzacja) wie `process` — pobieranie pomija komplet na dysku, ASR
+     reużywa raw.json. Jedyny wybór, który naprawdę należy do człowieka,
+     to „czy zapłacić za ASR jeszcze raz” — i ten wybór ma własne
+     potwierdzenie, nie modyfikator. Odsłuch nagrania to druga, niezależna
+     intencja — dlatego secondary, w nagłówku, nawet bez transkryptu. #}
+  <div class="row">
+    <form method="post" action="/meetings/{{ m.id }}/enqueue" class="row" data-busy-form>
+      {% if m.recording_id %}
+        {% if m.transcript_state == 'ready' %}
+          <input type="hidden" name="force_asr" value="true">
+          <button class="btn btn-primary" name="kind" value="process"
+                  data-busy-label="Queueing…" data-confirm="redo-confirm">Redo transcript</button>
+        {% else %}
+          <button class="btn btn-primary" name="kind" value="process"
+                  data-busy-label="Queueing…">Get transcript</button>
+        {% endif %}
       {% else %}
-        <button class="btn btn-primary" name="kind" value="process"
-                data-busy-label="Queueing…">Get transcript</button>
+        <span class="badge b-no_recording">No recording</span>
       {% endif %}
-    {% else %}
-      <span class="badge b-no_recording">No recording</span>
-    {% endif %}
-  </form>
+    </form>
+    {% if has_recording %}{{ ui.recording_download(m) }}{% endif %}
+  </div>
 </div>
 
 {% if m.recording_id and m.transcript_state == 'ready' %}
