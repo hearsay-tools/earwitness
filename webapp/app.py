@@ -32,6 +32,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import labels, tasks
+from webapp.app_settings import get_autoprocess, save_autoprocess
 from webapp.auth import (
     DomainNotAllowed,
     OAuthError,
@@ -419,6 +420,7 @@ def meetings_view(
             "active_jobs": active_jobs,
             "last_sync": session.execute(select(func.max(Meeting.synced_at))).scalar(),
             "untitled": untitled_count(session),
+            "autoprocess": get_autoprocess(session),
         },
     )
 
@@ -796,13 +798,13 @@ def trigger_sync(
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ):
+    save_autoprocess(session, bool(autoprocess))
     job = enqueue(
         session,
         "sync_recall",
         args={
             "lookback_days": lookback_days,
             "with_calendar": bool(with_calendar),
-            "autoprocess": bool(autoprocess),
             "user_id": user.id,
         },
         priority=10,

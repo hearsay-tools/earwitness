@@ -25,7 +25,7 @@
     <form method="post" action="/sync" class="row" data-busy-form>
       <label class="check small"><input type="checkbox" name="with_calendar" value="true" checked> titles from calendar</label>
       <label class="check small" title="Right after the sync, queues download and transcription of finished recordings. Note: this costs money.">
-        <input type="checkbox" name="autoprocess" value="true"> process automatically
+        <input type="checkbox" name="autoprocess" value="true"{% if autoprocess %} checked{% endif %}> process automatically
       </label>
       <button class="btn btn-primary" data-busy-label="Syncing…">Sync with Recall.ai</button>
     </form>

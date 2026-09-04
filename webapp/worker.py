@@ -103,7 +103,6 @@ def scheduler_loop(children: list[mp.Process]) -> None:
                             "sync_recall",
                             args={
                                 "lookback_days": settings.sync_lookback_days,
-                                "autoprocess": settings.autoprocess,
                             },
                             priority=50,
                             dedupe_key="sync_recall:auto",

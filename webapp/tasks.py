@@ -29,6 +29,7 @@ from transcripts.energy_diarization import format_transcript as format_energy_tr
 from transcripts.recall_client import download_bot_assets
 from transcripts.transcribe import transcribe as elevenlabs_transcribe
 
+from webapp.app_settings import get_autoprocess
 from webapp.config import settings
 from webapp.jobs import JobContext, enqueue, task
 from webapp.models import Meeting, Transcript, User, utcnow
@@ -373,7 +374,7 @@ def sync_recall(ctx: JobContext) -> dict[str, Any]:
             f"emails matched: {ident['matched']}, without an email: {ident['left']}"
         )
 
-    if ctx.args.get("autoprocess", settings.autoprocess):
+    if get_autoprocess(ctx.session):
         queued = _autoqueue(ctx)
         result["queued"] = queued
         ctx.log(f"queued {queued} meetings for processing")

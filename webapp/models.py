@@ -503,3 +503,22 @@ class Job(Base):
 
 
 Index("ix_jobs_claim", Job.status, Job.priority, Job.scheduled_at)
+
+
+# --------------------------------------------------------------------------
+# Ustawienia aplikacji
+# --------------------------------------------------------------------------
+
+
+class AppSetting(Base):
+    """Trwałe ustawienie — para klucz/wartość, nie env.
+
+    Env (`AUTOPROCESS` itd.) zostaje wartością początkową, dopóki UI nie
+    zapisze wiersza. Scheduler i ręczny Sync czytają stąd, żeby checkbox
+    na liście spotkań był tym samym źródłem co autosync.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
