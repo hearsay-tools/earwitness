@@ -79,3 +79,25 @@ one:
 | `infra` | Docker, `docker-compose.yml`, GitHub Actions |
 | `docs` | README, `CLAUDE.md` |
 | `process` | repo development process: issue templates, triage, review automation, dev-flow |
+
+### Dev flow bindings
+
+Concrete values for this repo, in one place so every contributor — human
+or agent — reads the same ones. Rows are matched by label, so update a
+row's value when the thing it names changes, rather than its label.
+
+| Binding | Value |
+|---|---|
+| Default branch | `main` |
+| Branching model | GitHub flow — feature branches off `main`, pull requests based on `main` |
+| Code host | GitHub |
+| CI provider | GitHub Actions |
+| Issue tracker | GitHub Issues |
+| Tracker statuses | unknown |
+| Stack | Python 3.12, uv, FastAPI |
+| Verification | `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest` |
+| Automated reviewer | `AUTOMATED_REVIEWER=codex` |
+| Commit convention | Conventional Commits |
+| Specs and plans | unknown |
+| Board | **Earwitness** / Backlog, user `wjarka`, project #3, view #1 |
+| Task orchestrator | none |
