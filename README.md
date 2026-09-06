@@ -37,6 +37,8 @@ uv run python -m webapp.worker -c 2
 Do pierwszego uruchomienia lokalnie wystarczy `AUTH_DISABLED=1` w `.env`
 (pomija logowanie). Testy: `uv run pytest`.
 
+Konfiguracja nagrywania z kalendarza: [Recall Calendar V1 — wdrożenie i migracja](docs/recall-calendar.md).
+
 ### Co umie
 
 | Obszar | Szczegóły |

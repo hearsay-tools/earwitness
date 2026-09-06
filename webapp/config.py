@@ -57,6 +57,11 @@ class Settings:
     # --- Recall.ai ---
     recall_api_key: str = os.environ.get("RECALL_API_KEY", "")
     recall_region: str = os.environ.get("RECALL_REGION", "eu-central-1")
+    recall_google_client_id: str = os.environ.get("RECALL_GOOGLE_CLIENT_ID", "")
+
+    @property
+    def recall_calendar_configured(self) -> bool:
+        return bool(self.recall_api_key and self.recall_google_client_id)
 
     # --- pipeline ---
     elevenlabs_api_key: str = os.environ.get("ELEVENLABS_API_KEY", "")
@@ -107,6 +112,11 @@ class Settings:
             warn.append("SECRET_KEY nieustawiony — używam dev fallbacku.")
         if not self.recall_api_key:
             warn.append("RECALL_API_KEY nieustawiony — sync spotkań nie zadziała.")
+        elif not self.recall_google_client_id:
+            warn.append(
+                "RECALL_GOOGLE_CLIENT_ID nieustawiony — połączenie Recall Calendar "
+                "nie zadziała."
+            )
         if not self.elevenlabs_api_key:
             warn.append("ELEVENLABS_API_KEY nieustawiony — pipeline nie zadziała.")
         return warn

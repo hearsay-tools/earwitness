@@ -720,6 +720,87 @@ pre.log {
 .notice-ok { background: var(--lime-soft); border-color: var(--lime-line); color: var(--lime-text); }
 .notice strong { color: inherit; }
 
+/* ---------- Recall Calendar ---------- */
+.calendar-head { align-items: flex-end; }
+.calendar-head .btn { min-height: 44px; }
+.calendar-section h2 { font-size: 20px; margin: 0; }
+.calendar-section h3 { font-size: 15px; margin: 0 0 var(--s1); }
+.calendar-section-head { margin-bottom: var(--s4); }
+.calendar-account { margin: 0 0 var(--s1); }
+.calendar-disconnect { margin-top: var(--s4); }
+.calendar-unavailable { max-width: 720px; }
+.calendar-unavailable .notice { margin-bottom: var(--s3); }
+.setup-help summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mode-fieldset { border: 0; padding: 0; margin: 0 0 var(--s3); min-width: 0; }
+.mode-fieldset legend {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  margin-bottom: var(--s2);
+}
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2);
+}
+.mode-option {
+  min-height: 72px;
+  display: flex;
+  gap: var(--s3);
+  align-items: flex-start;
+  padding: var(--s3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: border-color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.mode-option:hover { border-color: var(--ink); }
+.mode-option:has(input:checked) { border-color: var(--lime-text); background: var(--lime-soft); }
+.mode-option input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin: 1px 0 0;
+  accent-color: var(--lime);
+}
+.mode-option span { min-width: 0; }
+.mode-option strong { display: block; font-size: 14px; }
+.mode-option small { display: block; color: var(--ink-3); line-height: 1.35; margin-top: var(--s1); }
+.mode-option:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.domain-help { max-width: 72ch; margin-bottom: var(--s2); }
+.eligibility-help { max-width: 82ch; margin-bottom: var(--s4); }
+.calendar-meetings { border-top: 1px solid var(--line); }
+.calendar-meeting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  border-bottom: 1px solid var(--line);
+}
+.calendar-meeting:last-child { border-bottom: 0; }
+.calendar-meeting p { color: var(--ink-3); font-size: 12px; margin: 0; }
+.calendar-meeting-status {
+  text-align: right;
+  display: flex;
+  gap: var(--s1);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.calendar-section .btn { min-height: 44px; }
+
 /* ---------- dialog potwierdzenia ----------
    Tylko przed akcją, która kosztuje. Wygląda jak karta, bo to ta sama
    powierzchnia — nie nowy język wizualny na jedno okno. */
@@ -836,6 +917,10 @@ pre.log {
   .utt { grid-template-columns: 68px 1fr; }
   .utt .tx { grid-column: 1 / -1; }
   .empty { padding: var(--s6) var(--s4); }
+  .mode-grid { grid-template-columns: 1fr; }
+  .mode-option { min-height: 64px; }
+  .calendar-meeting { padding: var(--s3) var(--s4); align-items: start; }
+  .calendar-meeting-status { text-align: left; }
 
   /* Tabele stają się kartami. Osiem kolumn nie zmieści się na 360 px,
      a poziomy scroll na liście wyników to porażka, nie kompromis. */
@@ -866,6 +951,11 @@ pre.log {
   .kv td::before { display: none; }
   .kv, .kv tbody, .kv tr { display: table; width: 100%; }
   .kv tr { border: 0; padding: 0; margin: 0; }
+}
+
+@media (max-width: 420px) {
+  .calendar-meeting { grid-template-columns: 1fr; gap: var(--s2); }
+  .calendar-section form > .btn { width: 100%; white-space: normal; }
 }
 
 /* =========================================================================

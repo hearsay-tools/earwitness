@@ -98,6 +98,45 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class CalendarIdentity(Base):
+    """Stable local ownership of one Recall Calendar V1 identity."""
+
+    __tablename__ = "calendar_identities"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    external_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # Newly allocated identities must complete one explicit recording choice.
+    # Operator-adopted identities use the default completed state.
+    setup_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    pending_mode: Mapped[Optional[str]] = mapped_column(String(16))
+    created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class CalendarOAuthAttempt(Base):
+    """Short-lived, session-bound state for the Calendar OAuth handoff."""
+
+    __tablename__ = "calendar_oauth_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    state_digest: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    session_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    return_nonce_digest: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    requested_mode: Mapped[Optional[str]] = mapped_column(String(16))
+    created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, default=utcnow)
+    expires_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, nullable=False)
+    bridge_consumed_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
+    return_consumed_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
+
+
 # --------------------------------------------------------------------------
 # Spotkania
 # --------------------------------------------------------------------------

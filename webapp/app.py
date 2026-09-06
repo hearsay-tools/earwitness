@@ -13,7 +13,7 @@ import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
@@ -42,6 +42,7 @@ from webapp.auth import (
     require_user,
     upsert_user,
 )
+from webapp.calendar_routes import router as calendar_router
 from webapp.config import settings
 from webapp.db import get_session, init_db, session_scope
 from webapp.jobs import cancel as cancel_job
@@ -85,6 +86,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Earwitness", docs_url="/api/docs", redoc_url=None, lifespan=lifespan
 )
+app.include_router(calendar_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -268,18 +270,30 @@ async def http_error(request: Request, exc: StarletteHTTPException):
 # --------------------------------------------------------------------------
 
 
+def _safe_login_target(value: str) -> str | None:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return None
+    if "\\" in value or any(ord(char) < 32 for char in value):
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return None
+    return value
+
+
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: Optional[str] = None, next: str = "/"):
+def login_page(request: Request, error: Optional[str] = None, next: str = ""):
+    target = _safe_login_target(next)
     if settings.auth_disabled:
-        return RedirectResponse(next or "/", status_code=302)
+        return RedirectResponse(target or "/", status_code=302)
     if request.session.get("user_id"):
-        return RedirectResponse(next or "/", status_code=302)
+        return RedirectResponse(target or "/", status_code=302)
     return templates.TemplateResponse(
         request,
         "login.html",
         {
             "error": error,
-            "next": next,
+            "next": target or "",
             "configured": settings.oauth_configured,
             "domains": settings.allowed_domains,
             "settings": settings,
@@ -289,10 +303,13 @@ def login_page(request: Request, error: Optional[str] = None, next: str = "/"):
 
 
 @app.get("/auth/google")
-async def auth_google(request: Request, next: str = "/"):
+async def auth_google(request: Request, next: str = ""):
     if not settings.oauth_configured:
         return RedirectResponse("/login?error=OAuth+is+not+configured", status_code=302)
-    request.session["post_login_redirect"] = next or "/"
+    request.session.pop("post_login_redirect", None)
+    target = _safe_login_target(next)
+    if target:
+        request.session["post_login_redirect"] = target
     redirect_uri = f"{settings.base_url.rstrip('/')}/auth/callback"
     return await oauth.google.authorize_redirect(
         request, redirect_uri, **authorize_params()
@@ -315,6 +332,14 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
         )
         claims = resp.json()
 
+    sub = claims.get("sub") or (claims.get("email") or "").lower()
+    email = (claims.get("email") or "").lower()
+    existing_user = None
+    if sub:
+        existing_user = session.scalar(select(User).where(User.google_sub == sub))
+    if existing_user is None and email:
+        existing_user = session.scalar(select(User).where(User.email == email))
+
     try:
         user = upsert_user(session, claims, token)
     except DomainNotAllowed as e:
@@ -327,7 +352,9 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
         return RedirectResponse(f"/login?error={e}", status_code=302)
 
     request.session["user_id"] = user.id
-    target = request.session.pop("post_login_redirect", "/") or "/"
+    target = request.session.pop("post_login_redirect", None)
+    if target is None:
+        target = "/calendar" if existing_user is None else "/"
     if not user.calendar_scope_granted:
         log.warning("użytkownik %s bez scope kalendarza", user.email)
     return RedirectResponse(target, status_code=302)

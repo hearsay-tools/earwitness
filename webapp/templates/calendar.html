@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui %}
+{% block title %}Calendar{% endblock %}
+{% block content %}
+<div class="row-between head calendar-head">
+  <div>
+    <p class="eyebrow">Recall Calendar</p>
+    <h1>Calendar<span class="u">_</span></h1>
+    <p class="sub">Choose which eligible meetings get an Earwitness bot.</p>
+  </div>
+  {% if connection %}
+  <a class="btn btn-line" href="/calendar">Refresh</a>
+  {% endif %}
+</div>
+
+{% if success %}<div class="notice notice-ok" role="status"><div>{{ success }}</div></div>{% endif %}
+{% if error %}<div class="notice notice-err" role="alert"><div>{{ error }}</div></div>{% endif %}
+{% if fetch_error %}
+<div class="notice notice-err" role="alert">
+  <div><strong>Calendar data could not be refreshed.</strong><br>{{ fetch_error }}</div>
+</div>
+{% endif %}
+
+{% if not configured %}
+<div class="card card-pad calendar-unavailable">
+  <div class="notice notice-warn" role="status">
+    <div>
+      <strong>Calendar setup is unavailable.</strong><br>
+      Ask an administrator to finish the Recall Calendar setup, then reload this page.
+    </div>
+  </div>
+  <details class="setup-help">
+    <summary>Setup details for administrators</summary>
+    <p class="hint">Configure <span class="mono">RECALL_API_KEY</span> and
+      <span class="mono">RECALL_GOOGLE_CLIENT_ID</span> on the server.</p>
+  </details>
+</div>
+{% else %}
+
+<section class="card card-pad calendar-section" aria-labelledby="connection-title">
+  <div class="row-between calendar-section-head">
+    <div>
+      <p class="eyebrow">Connection</p>
+      <h2 id="connection-title">Google Calendar</h2>
+    </div>
+    {% if connection %}
+      <span class="badge b-ready">Connected</span>
+    {% elif fetch_error and identity %}
+      <span class="badge b-failed">Unavailable</span>
+    {% else %}
+      <span class="badge b-none">Not connected</span>
+    {% endif %}
+  </div>
+
+  {% if fetch_error and identity %}
+    <p><strong>Connection status unavailable.</strong> Recall could not be reached, so the saved connection has not been changed.</p>
+    <a class="btn btn-line" href="/calendar">Retry calendar refresh</a>
+  {% elif connection %}
+    <p class="calendar-account">Syncing as <strong>{{ connection.email or user.email }}</strong>.</p>
+    <p class="hint">Recall keeps upcoming events synced and schedules bots from the choice below.</p>
+    <form method="post" action="/calendar/disconnect" data-busy-form class="calendar-disconnect">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn btn-line" data-busy-label="Disconnecting…">Disconnect Google Calendar</button>
+    </form>
+  {% else %}
+    {% if identity %}
+      <p>The Google connection is offline. Reconnect it to resume calendar syncing.</p>
+    {% else %}
+      <p>Connect your primary Google Calendar to see upcoming meetings and schedule Recall bots.</p>
+    {% endif %}
+    <form method="post" action="/calendar/connect" data-busy-form class="calendar-connect-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if needs_initial_choice %}
+      <fieldset class="mode-fieldset">
+        <legend>Choose what to record</legend>
+        <div class="mode-grid">
+          {% for choice in mode_choices %}
+          <label class="mode-option">
+            <input type="radio" name="mode" value="{{ choice.value }}"{% if mode == choice.value %} checked{% endif %} required>
+            <span><strong>{{ choice.label }}</strong><small>{{ choice.description }}</small></span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% elif upstream_mode == 'custom' %}
+      <div class="notice notice-warn"><div><strong>Custom recording rules are preserved.</strong><br>Reconnect first; you can replace them with one of the four choices later.</div></div>
+      {% else %}
+      <p class="hint">Your existing <strong>{{ upstream_mode_label or 'saved' }}</strong> recording choice will be preserved.</p>
+      {% endif %}
+      <p class="hint domain-help">An external attendee has a different email domain from the meeting host. Internal meetings keep everyone on the host domain.</p>
+      <p class="hint eligibility-help">Eligible events have a supported meeting link and start/end times, are not all-day, cancelled, or over, and may still require someone to admit the bot.</p>
+      <button class="btn btn-primary" data-busy-label="Opening Google…">Connect Google Calendar</button>
+    </form>
+  {% endif %}
+</section>
+
+{% if connection or (fetch_error and identity) %}
+<section class="card card-pad calendar-section" aria-labelledby="preferences-title">
+  <div class="calendar-section-head">
+    <p class="eyebrow">Automatic recording</p>
+    <h2 id="preferences-title">Recording choice</h2>
+  </div>
+  {% if upstream_mode == 'custom' and mode != 'custom' %}
+  <div class="notice notice-warn"><div>The current Recall settings are <strong>Custom</strong>. Saving below replaces the six automatic recording flags only.</div></div>
+  {% elif upstream_mode == 'custom' %}
+  <div class="notice notice-warn"><div><strong>Custom</strong> rules are active. Choose an option below only when you want to replace them.</div></div>
+  {% endif %}
+  <form method="post" action="/calendar/preferences" data-busy-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <fieldset class="mode-fieldset">
+      <legend class="visually-hidden">Recording choice</legend>
+      <div class="mode-grid">
+        {% for choice in mode_choices %}
+        <label class="mode-option">
+          <input type="radio" name="mode" value="{{ choice.value }}"{% if mode == choice.value %} checked{% endif %} required>
+          <span><strong>{{ choice.label }}</strong><small>{{ choice.description }}</small></span>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <p class="hint domain-help">External means at least one attendee has a different email domain from the host. Internal means none do.</p>
+    <p class="hint eligibility-help">Eligible events have a supported meeting link and start/end times, are not all-day, cancelled, or over, and may still require someone to admit the bot.</p>
+    {% if mode == 'off' %}<p class="hint">Manual overrides can still schedule a bot while automatic recording is Off.</p>{% endif %}
+    <button class="btn btn-primary" data-busy-label="Saving…">Save recording choice</button>
+  </form>
+</section>
+
+{% endif %}
+
+{% if connection %}
+<section class="card calendar-section" aria-labelledby="upcoming-title">
+  <div class="card-pad calendar-section-head row-between">
+    <div>
+      <p class="eyebrow">Next 14 days</p>
+      <h2 id="upcoming-title">Upcoming meetings</h2>
+    </div>
+    <span class="muted small">Synced by Recall</span>
+  </div>
+  {% if meetings %}
+  <div class="calendar-meetings">
+    {% for meeting in meetings %}
+    <article class="calendar-meeting">
+      <div>
+        <h3>{{ meeting.title or 'Untitled meeting' }}</h3>
+        <p>{{ meeting.start_time | calendar_dt }} · {{ meeting.meeting_platform | platform }}</p>
+      </div>
+      <div class="calendar-meeting-status">
+        {% if meeting.bot_id %}
+          <span class="badge b-upcoming">Bot scheduled</span>
+        {% endif %}
+        {% if meeting.override_should_record is sameas false %}
+          <span class="badge b-no_recording">Manual skip</span>
+        {% elif meeting.override_should_record is sameas true %}
+          <span class="badge b-queued">Manual recording</span>
+        {% elif meeting.will_record and not meeting.bot_id %}
+          <span class="badge b-queued">Scheduling</span>
+        {% elif not meeting.bot_id %}
+          <span class="badge b-none">Not scheduled</span>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+    {% call ui.empty(ui.art_meetings(), 'No upcoming meetings yet', 'Recall may still be syncing. Refresh in a moment, or check that eligible events have a meeting link.') %}
+      <a class="btn btn-line" href="/calendar">Refresh calendar</a>
+    {% endcall %}
+  {% endif %}
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

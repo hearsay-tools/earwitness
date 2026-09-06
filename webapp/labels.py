@@ -76,6 +76,29 @@ PLATFORMS: dict[str, str] = {
     "slack": "Slack Huddle",
 }
 
+CALENDAR_MODES: tuple[dict[str, str], ...] = (
+    {
+        "value": "off",
+        "label": "Off",
+        "description": "Do not schedule bots automatically.",
+    },
+    {
+        "value": "external",
+        "label": "External only",
+        "description": "Record meetings with at least one attendee outside the host domain.",
+    },
+    {
+        "value": "internal",
+        "label": "Internal only",
+        "description": "Record meetings where every attendee shares the host domain.",
+    },
+    {
+        "value": "all",
+        "label": "All eligible meetings",
+        "description": "Record internal and external meetings that meet Recall's requirements.",
+    },
+)
+
 # Po co bot był w spotkaniu, a nie wyszło — tłumaczymy najczęstsze sub_code'y,
 # bo „timeout_exceeded_waiting_room” nic nie mówi osobie nietechnicznej.
 STATUS_HINTS: dict[str, str] = {
