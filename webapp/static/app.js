@@ -77,6 +77,52 @@
   });
 
   // -----------------------------------------------------------------------
+  // Process automatically: zapis przy przełączeniu, bez POST-a Sync.
+  // Bez JS-a checkbox zostaje polem formularza Sync — stary fallback.
+  // -----------------------------------------------------------------------
+  document.querySelectorAll("[data-autoprocess]").forEach((box) => {
+    let inflight = false;
+    let confirmed = box.checked;
+    const persist = async () => {
+      if (inflight) return;
+      inflight = true;
+      box.setAttribute("aria-busy", "true");
+      try {
+        while (true) {
+          const intended = box.checked;
+          box.removeAttribute("aria-invalid");
+          const body = new URLSearchParams();
+          if (intended) body.set("autoprocess", "true");
+          try {
+            const res = await fetch("/api/settings/autoprocess", {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body,
+            });
+            if (!res.ok) throw new Error("save failed");
+          } catch (_) {
+            if (box.checked === intended) {
+              box.checked = confirmed;
+              box.setAttribute("aria-invalid", "true");
+              return;
+            }
+            continue;
+          }
+          confirmed = intended;
+          if (box.checked === intended) return;
+        }
+      } finally {
+        inflight = false;
+        box.removeAttribute("aria-busy");
+      }
+    };
+    box.addEventListener("change", persist);
+  });
+
+  // -----------------------------------------------------------------------
   // Filtry: submit po zmianie kontrolki, debounce na szukajce.
   // -----------------------------------------------------------------------
   const form = document.querySelector("form[data-autosubmit]");

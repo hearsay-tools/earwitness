@@ -1,7 +1,7 @@
 """Trwałe ustawienia aplikacji — to, co UI zapisuje, a scheduler czyta.
 
 Env zostaje wartością początkową (np. `AUTOPROCESS` w `.env`). Po pierwszym
-zapisie z formularza Sync wygrywa wiersz w `app_settings`.
+zapisie z UI wygrywa wiersz w `app_settings`.
 """
 
 from __future__ import annotations

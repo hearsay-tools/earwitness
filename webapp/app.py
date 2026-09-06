@@ -816,6 +816,16 @@ def job_cancel(
     return RedirectResponse("/jobs", status_code=303)
 
 
+@app.post("/api/settings/autoprocess")
+def save_autoprocess_setting(
+    autoprocess: bool = Form(False),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    save_autoprocess(session, bool(autoprocess))
+    return {"autoprocess": get_autoprocess(session)}
+
+
 @app.post("/sync")
 def trigger_sync(
     request: Request,
