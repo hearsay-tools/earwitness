@@ -23,3 +23,6 @@ output/*
 
 # Local experiment logs / scratch (may contain names)
 experiments/
+
+# Verification-skill evidence (verify-earwitness)
+.verification-evidence/

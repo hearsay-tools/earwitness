@@ -110,12 +110,16 @@ def test_aggregate_check_is_named_automated_code_review(workflow):
 
 
 def test_no_second_independent_review_workflow():
-    review_workflows = [
-        path.name
-        for path in WORKFLOWS_DIR.glob("*.yml")
-        if "claude-code-action" in path.read_text()
-        or "openai/codex-action" in path.read_text()
-    ]
+    # Only PR-triggered workflows can review PRs. Scheduled agent runs
+    # (verification-maintenance.yml) use the same actions for other work.
+    review_workflows = []
+    for path in WORKFLOWS_DIR.glob("*.yml"):
+        text = path.read_text()
+        if "claude-code-action" not in text and "openai/codex-action" not in text:
+            continue
+        triggers = yaml.safe_load(text).get(True) or yaml.safe_load(text).get("on")
+        if "pull_request" in triggers or "pull_request_target" in triggers:
+            review_workflows.append(path.name)
     assert review_workflows == ["automated-code-review.yml"]
 
 

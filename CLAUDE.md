@@ -96,6 +96,7 @@ row's value when the thing it names changes, rather than its label.
 | Tracker statuses | unknown |
 | Stack | Python 3.12, uv, FastAPI |
 | Verification | `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest` |
+| Verification skill | `.claude/skills/verify-earwitness/SKILL.md` |
 | Automated reviewer | `AUTOMATED_REVIEWER=codex` |
 | Commit convention | Conventional Commits |
 | Specs and plans | unknown |

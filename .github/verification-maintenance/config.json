@@ -1,0 +1,13 @@
+{
+  "app_secrets": {},
+  "bootstrap": [
+    "pipx install uv",
+    "uv sync --frozen"
+  ],
+  "integration_branch": "main",
+  "model": "",
+  "provider": "codex",
+  "repository": "wjarka/earwitness",
+  "schedule": "17 4 * * 1",
+  "target": ".claude/skills/verify-earwitness/SKILL.md"
+}
