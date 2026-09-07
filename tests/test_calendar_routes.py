@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import logging
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -67,6 +68,7 @@ class RecallFixture:
         self.fail_authenticate = False
         self.fail_reads = False
         self.requests: list[httpx.Request] = []
+        self.upcoming_meetings: list[dict] | None = None
 
     def user(self, external_id: str = "stable-external") -> dict:
         connections = []
@@ -86,13 +88,15 @@ class RecallFixture:
             "preferences": dict(self.preferences),
         }
 
-    def meeting(self, *, bot_id: str | None = None, override=None) -> dict:
+    def meeting(
+        self, *, bot_id: str | None = None, override=None, will_record: bool = True
+    ) -> dict:
         return {
             "id": "calendar-meeting-id",
             "override_should_record": override,
             "title": "Customer planning",
             "description": "",
-            "will_record": True,
+            "will_record": will_record,
             "will_record_reason": "record_external",
             "start_time": "2026-09-07T09:00:00Z",
             "end_time": "2026-09-07T09:30:00Z",
@@ -129,15 +133,13 @@ class RecallFixture:
             self.connected = False
             return httpx.Response(200, json=self.user())
         if path.endswith("/calendar/meetings/"):
-            return httpx.Response(
-                200,
-                json=[
-                    self.meeting(bot_id="scheduled-bot"),
-                    self.meeting(override=False),
-                    self.meeting(bot_id="kept-bot", override=True),
-                    self.meeting(bot_id="pending-removal-bot", override=False),
-                ],
-            )
+            meetings = self.upcoming_meetings or [
+                self.meeting(bot_id="scheduled-bot"),
+                self.meeting(override=False),
+                self.meeting(bot_id="kept-bot", override=True),
+                self.meeting(bot_id="pending-removal-bot", override=False),
+            ]
+            return httpx.Response(200, json=meetings)
         if path.endswith("/calendar/user/") and request.method == "PUT":
             if self.fail_update:
                 return httpx.Response(503, text="private upstream detail")
@@ -600,6 +602,47 @@ def test_bot_schedule_and_manual_override_are_both_visible(client, session, reca
     assert page.text.count("Bot scheduled") == 3
     assert page.text.count("Manual recording") == 1
     assert page.text.count("Manual skip") == 2
+
+
+def _badge_class(html: str, label: str) -> str:
+    match = re.search(rf'class="badge ([^"]+)">{re.escape(label)}', html)
+    assert match is not None, f"badge {label!r} missing"
+    return match.group(1)
+
+
+def _badge_background_token(css: str, class_name: str) -> str:
+    for block in css.split("}"):
+        header = block.split("{")[0]
+        if not re.search(rf"\.{re.escape(class_name)}(?![\w-])", header):
+            continue
+        body = block.split("{", 1)[1] if "{" in block else ""
+        match = re.search(r"background:\s*var\((--[\w-]+)\)", body)
+        if match:
+            return match.group(1)
+    raise AssertionError(f"no background token for .{class_name}")
+
+
+def test_bot_scheduled_and_not_scheduled_use_distinct_token_colors(
+    client, session, recall
+):
+    user = _dev_user(session)
+    ensure_identity(session, user, workspace_users=[])
+    recall.connected = True
+    recall.upcoming_meetings = [
+        recall.meeting(bot_id="scheduled-bot"),
+        recall.meeting(will_record=False),
+    ]
+
+    page = client.get("/calendar", headers=HTML)
+    css = Path("webapp/static/app.css").read_text()
+    scheduled = _badge_class(page.text, "Bot scheduled")
+    unscheduled = _badge_class(page.text, "Not scheduled")
+
+    assert scheduled != unscheduled
+    assert _badge_background_token(css, scheduled) != _badge_background_token(
+        css, unscheduled
+    )
+    assert _badge_background_token(css, "b-upcoming") == "--bg-3"
 
 
 def test_reconnect_preserves_custom_preferences(client, session, recall):

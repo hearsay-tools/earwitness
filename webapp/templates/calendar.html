@@ -146,7 +146,7 @@
       </div>
       <div class="calendar-meeting-status">
         {% if meeting.bot_id %}
-          <span class="badge b-upcoming">Bot scheduled</span>
+          <span class="badge b-cal-scheduled">Bot scheduled</span>
         {% endif %}
         {% if meeting.override_should_record is sameas false %}
           <span class="badge b-no_recording">Manual skip</span>
@@ -155,7 +155,7 @@
         {% elif meeting.will_record and not meeting.bot_id %}
           <span class="badge b-queued">Scheduling</span>
         {% elif not meeting.bot_id %}
-          <span class="badge b-none">Not scheduled</span>
+          <span class="badge b-cal-unscheduled">Not scheduled</span>
         {% endif %}
       </div>
     </article>
