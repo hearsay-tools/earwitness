@@ -491,7 +491,7 @@ def test_backfill_reconciles_rosters_of_ingested_meetings(session, meeting, honc
     session.commit()
     job = J.enqueue(session, "honcho_backfill")
     J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
-    assert job.result == {"queued": 0, "reconciled": 1, "force": False}
+    assert job.result == {"queued": 0, "remaining": 0, "reconciled": 1, "force": False}
     assert memory.peer_id("new@acme.com") in {
         p.id for p in honcho.sessions[meeting.id].peers()
     }
@@ -654,7 +654,7 @@ def test_backfill_fans_out_one_ingest_per_unsynced_meeting(session, meeting, hon
 
     job = J.enqueue(session, "honcho_backfill")
     J.run_job(session, J.claim(session, "w1"))
-    assert job.result == {"queued": 1, "reconciled": 0, "force": False}
+    assert job.result == {"queued": 1, "remaining": 0, "reconciled": 0, "force": False}
     ingests = session.query(Job).filter(Job.kind == "honcho_ingest").all()
     assert [j.meeting_id for j in ingests] == [meeting.id]
 
@@ -701,6 +701,52 @@ def test_backfill_enqueues_ingests_in_meeting_chronology(session, tmp_path, honc
         session.query(Job).filter(Job.kind == "honcho_ingest").order_by(Job.id).all()
     )
     assert [j.meeting_id for j in ingests] == ["bot-march", "bot-may", "bot-june"]
+
+
+def test_backfill_limit_queues_oldest_n_and_reports_remaining(
+    session, tmp_path, honcho
+):
+    for bot_id, when in (
+        ("bot-june", dt.datetime(2026, 6, 1, 10, 0, tzinfo=dt.timezone.utc)),
+        ("bot-march", dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc)),
+        ("bot-may", dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.timezone.utc)),
+    ):
+        _ready_meeting(session, tmp_path, bot_id, when)
+
+    job = J.enqueue(session, "honcho_backfill", args={"limit": 2})
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    assert job.result == {"queued": 2, "remaining": 1, "reconciled": 0, "force": False}
+    ingests = (
+        session.query(Job).filter(Job.kind == "honcho_ingest").order_by(Job.id).all()
+    )
+    assert [j.meeting_id for j in ingests] == ["bot-march", "bot-may"]
+
+
+def test_backfill_without_limit_still_queues_all_missing(session, meeting, honcho):
+    job = J.enqueue(session, "honcho_backfill")
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    assert job.result["queued"] == 1
+    assert job.result["remaining"] == 0
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 1
+
+
+def test_overlapping_backfill_batches_do_not_duplicate_ingest_jobs(
+    session, tmp_path, honcho
+):
+    for bot_id, when in (
+        ("bot-june", dt.datetime(2026, 6, 1, 10, 0, tzinfo=dt.timezone.utc)),
+        ("bot-march", dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc)),
+        ("bot-may", dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.timezone.utc)),
+    ):
+        _ready_meeting(session, tmp_path, bot_id, when)
+
+    first = J.enqueue(session, "honcho_backfill", args={"limit": 2}, dedupe_key="b1")
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    second = J.enqueue(session, "honcho_backfill", args={"limit": 2}, dedupe_key="b2")
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    assert first.result["queued"] == 2
+    assert second.result["queued"] == 2
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 2
 
 
 def test_status_counts_only_the_latest_transcript_per_meeting(session, meeting, honcho):
@@ -910,3 +956,101 @@ def test_manual_ingest_button_queues_a_job(client, session, meeting, honcho):
     assert r.status_code == 303
     job = session.query(Job).filter(Job.kind == "honcho_ingest").one()
     assert job.args == {"transcript_id": meeting.latest_transcript.id}
+
+
+def test_ask_backfill_form_offers_batch_sizes(client, session, meeting, honcho):
+    r = client.get("/ask", headers=HTML)
+    assert 'name="limit"' in r.text
+    assert 'value="10"' in r.text
+    assert 'value="25"' in r.text
+    assert 'value="50"' in r.text
+    r = client.post(
+        "/memory/backfill", data={"limit": "10"}, headers=HTML, follow_redirects=False
+    )
+    assert r.status_code == 303
+    job = session.query(Job).filter(Job.kind == "honcho_backfill").one()
+    assert job.args == {"force": False, "limit": 10}
+
+
+def test_ask_shows_remaining_count_after_partial_ingest(
+    client, session, meeting, tmp_path, honcho
+):
+    memory.ingest_transcript(session, meeting.latest_transcript)
+    session.commit()
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-later",
+        dt.datetime(2026, 10, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    r = client.get("/ask", headers=HTML)
+    assert "1 remaining" in r.text
+
+
+def test_bulk_honcho_ingest_queues_ready_selected_meetings(
+    client, session, meeting, tmp_path, honcho
+):
+    bare = Meeting(
+        id="bot-bare",
+        title="No transcript",
+        transcript_state="none",
+        status_group="done",
+    )
+    session.add(bare)
+    other = _ready_meeting(
+        session,
+        tmp_path,
+        "bot-other",
+        dt.datetime(2026, 4, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    session.commit()
+    r = client.post(
+        "/meetings/bulk",
+        data={
+            "kind": "honcho_ingest",
+            "meeting_ids": [meeting.id, bare.id, other.id],
+        },
+        headers=HTML,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/jobs?queued=2"
+    ingests = session.query(Job).filter(Job.kind == "honcho_ingest").all()
+    assert {j.meeting_id for j in ingests} == {meeting.id, other.id}
+
+    r = client.post(
+        "/meetings/bulk",
+        data={
+            "kind": "honcho_ingest",
+            "meeting_ids": [meeting.id, other.id],
+        },
+        headers=HTML,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 2
+
+
+def test_bulk_honcho_ingest_is_404_when_disabled(
+    client, session, meeting, honcho, monkeypatch
+):
+    monkeypatch.setattr(settings, "honcho_enabled", False)
+    r = client.post(
+        "/meetings/bulk",
+        data={"kind": "honcho_ingest", "meeting_ids": [meeting.id]},
+        headers=HTML,
+    )
+    assert r.status_code == 404
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 0
+
+
+def test_meetings_list_hides_honcho_bulk_when_disabled(
+    client, session, meeting, honcho, monkeypatch
+):
+    meeting.transcript_state = "ready"
+    session.commit()
+    r = client.get("/meetings?view=all", headers=HTML)
+    assert 'value="honcho_ingest"' in r.text
+    monkeypatch.setattr(settings, "honcho_enabled", False)
+    r = client.get("/meetings?view=all", headers=HTML)
+    assert 'value="honcho_ingest"' not in r.text
