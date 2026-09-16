@@ -157,6 +157,14 @@
       {% endif %}
     </div>
 
+    {% if can_ask %}
+      {{ ui.ask_panel('/meetings/' ~ m.id ~ '/ask', ask,
+                      'What did we agree on? Who owns the follow-ups?',
+                      title='Ask about this meeting',
+                      hint=('Memory for this meeting is still being ingested — answers may be incomplete.'
+                            if transcript and not transcript.honcho_synced_at else none)) }}
+    {% endif %}
+
     <div class="card card-pad">
       <h2>Jobs</h2>
       {% if jobs %}
@@ -246,6 +254,26 @@
           <tr><td>Bot ID</td><td class="mono">{{ m.id }}</td></tr>
           <tr><td>Recording ID</td><td class="mono">{{ m.recording_id or '—' }}</td></tr>
           {% if m.asset_dir %}<tr><td>Files</td><td class="mono small">{{ m.asset_dir }}</td></tr>{% endif %}
+          {% if settings.honcho_enabled and transcript %}
+          <tr><td>Memory</td>
+              <td>
+                {% if transcript.honcho_synced_at %}
+                  <span class="badge b-ready" title="Ingested into Honcho {{ transcript.honcho_synced_at | dt }}">in memory</span>
+                  <span class="t-sub">{{ transcript.honcho_synced_at | ago }}</span>
+                {% else %}
+                  <span class="badge b-none">not in memory</span>
+                {% endif %}
+                {# Ręczne wgranie: po włączeniu Honcho na istniejącym archiwum
+                   albo gdy ingest padł i nikt nie klika retry w kolejce. #}
+                <form method="post" action="/meetings/{{ m.id }}/memory" class="inline" data-busy-form style="margin-top:var(--s1)">
+                  <button class="btn btn-line btn-sm" data-busy-label="Queueing…"
+                          title="Re-creates this meeting's Honcho session from the latest transcript.">
+                    {{ 'Re-ingest' if transcript.honcho_synced_at else 'Ingest now' }}
+                  </button>
+                </form>
+                {% if not can_ask %}<div class="t-sub" style="margin-top:var(--s1)">Ask is available to attendees of this meeting.</div>{% endif %}
+              </td></tr>
+          {% endif %}
         </tbody>
       </table>
     </div>

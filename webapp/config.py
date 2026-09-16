@@ -34,6 +34,12 @@ def _path(name: str, default: str) -> Path:
     return p if p.is_absolute() else (REPO_ROOT / p)
 
 
+def _honcho_url_default() -> str:
+    """Bez HONCHO_URL: Honcho z profilu compose, wystawione na hoście pod
+    HONCHO_HOST_PORT — ten sam port, który czyta docker-compose.yml."""
+    return f"http://localhost:{os.environ.get('HONCHO_HOST_PORT') or '8100'}"
+
+
 @dataclass
 class Settings:
     # --- serwer ---
@@ -84,6 +90,25 @@ class Settings:
     # Ile dni wstecz zaciągamy przy autosyncu.
     sync_lookback_days: int = int(os.environ.get("SYNC_LOOKBACK_DAYS", "30"))
 
+    # --- pamięć spotkań (Honcho, opcjonalny sidecar — issue #29) ---
+    # Wyłączone = appka nie wie, że Honcho istnieje. Włączone = gotowe
+    # transkrypty lecą do Honcho, a w UI pojawia się „Ask".
+    honcho_enabled: bool = _bool("HONCHO_ENABLED", False)
+    # Kontenery w compose mają na sztywno http://honcho-api:8000; procesy na
+    # hoście (./dev.sh) bez HONCHO_URL idą na localhost:HONCHO_HOST_PORT.
+    honcho_url: str = os.environ.get("HONCHO_URL") or _honcho_url_default()
+    honcho_workspace: str = os.environ.get("HONCHO_WORKSPACE", "earwitness")
+    # Puste przy AUTH_USE_AUTH=false po stronie Honcho (default w compose).
+    honcho_api_key: str = os.environ.get("HONCHO_API_KEY", "")
+    # Dialektyka odpowiada sekundy, ingest dużego spotkania też chwilę trwa.
+    honcho_timeout: float = float(os.environ.get("HONCHO_TIMEOUT", "120"))
+    # minimal | low | medium | high | max — koszt i czas rosną z poziomem.
+    honcho_reasoning_level: str = os.environ.get("HONCHO_REASONING_LEVEL", "low")
+    # Czy peer ma budować reprezentacje INNYCH uczestników sesji. Potrzebne do
+    # pytań międzyspotkaniowych o to, co mówili inni; mnoży koszt derivera
+    # (obserwator × mówca). Pytania o jedno spotkanie tego nie wymagają.
+    honcho_observe_others: bool = _bool("HONCHO_OBSERVE_OTHERS", False)
+
     def __post_init__(self) -> None:
         self.recall_dir.mkdir(parents=True, exist_ok=True)
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -119,6 +144,17 @@ class Settings:
             )
         if not self.elevenlabs_api_key:
             warn.append("ELEVENLABS_API_KEY nieustawiony — pipeline nie zadziała.")
+        if self.honcho_enabled and self.honcho_reasoning_level not in (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "max",
+        ):
+            warn.append(
+                f"HONCHO_REASONING_LEVEL={self.honcho_reasoning_level!r} — "
+                "expected minimal|low|medium|high|max."
+            )
         return warn
 
 

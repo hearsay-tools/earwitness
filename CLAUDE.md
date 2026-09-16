@@ -52,6 +52,20 @@ PoC transkrypcji spotkań z nagrań Recall.ai. Stan i decyzje:
   bierze pod uwagę wyłącznie eventy z konferencją i odrzuca te z innym kodem
   Meet/Zoom niż `meeting_native_id` — inaczej „Lunch" o tej samej godzinie
   wygrywa z prawdziwym callem.
+- **Pamięć spotkań (Honcho, issue #29)** — opcjonalny sidecar, `HONCHO_ENABLED`
+  domyślnie off. Cała integracja siedzi w `webapp/memory.py`: spotkanie =
+  sesja (id = bot_id), uczestnik = peer z adresu e-mail (`peer_id()` robi slug
+  + hash, bo Honcho wymaga `^[a-zA-Z0-9_-]+$`), wypowiedź = message mówcy.
+  Ingest kasuje i odtwarza sesję (idempotencja), do sesji idą wszyscy ludzie
+  ze spotkania, także milczący. Pytania **ask-as-self**: `peer.chat` jako peer
+  zalogowanego — dostęp ogranicza Honcho po członkostwie w sesjach, nie nasz
+  kod; warunkiem jest zgodność adresu z logowania z `MeetingParticipant.email`.
+  Odpowiedzi synchronicznie w żądaniu (bez kolejki), ingest i backfill jako
+  joby `honcho_ingest` / `honcho_backfill`. Honcho jedzie z profilu compose
+  (`--profile honcho`), jedyny dostawca LLM to OpenAI (`OPENAI_API_KEY`).
+- Schemat bazy: `init_db()` robi `create_all` + `add_missing_columns()` —
+  nowa **nullowalna** kolumna w modelu doda się sama na istniejącej bazie.
+  Wszystko inne (NOT NULL, zmiana typu, usunięcie) wymaga ręcznej migracji.
 - Testy: `uv run pytest`.
 
 ## Operacyjne

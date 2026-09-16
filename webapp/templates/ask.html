@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui %}
+{% block title %}Ask{% endblock %}
+{% block content %}
+
+<div class="row-between head">
+  <div>
+    <h1>Ask<span class="u">_</span></h1>
+    <p class="sub" style="margin:0">
+      Questions across the meetings you attended. Answers draw only on meetings where you were a participant.
+    </p>
+  </div>
+</div>
+
+{% if memory.synced == 0 %}
+  {# Pusta pamięć: bez transkryptów w Honcho każde pytanie kończy się „nie wiem”,
+     więc zamiast formularza dajemy drogę do napełnienia pamięci. #}
+  {% call ui.empty(ui.art_memory(), 'Memory is empty',
+                   ('Ingest is running — ' ~ memory.pending ~ ' job(s) in the queue. Come back in a moment.')
+                   if memory.pending else
+                   ('There are ' ~ memory.ready ~ ' ready transcripts that are not in memory yet. Ingest them to start asking.')
+                   if memory.ready else
+                   'No transcripts yet. Process a meeting first, then its transcript lands in memory automatically.') %}
+    {% if memory.ready and not memory.pending %}
+      <form method="post" action="/memory/backfill" class="inline" data-busy-form>
+        <button class="btn btn-primary" data-busy-label="Queueing…">Ingest {{ memory.ready }} {{ 'transcript' if memory.ready == 1 else 'transcripts' }}</button>
+      </form>
+    {% elif memory.pending %}
+      <a class="btn btn-primary" href="/jobs?status=queued">Watch the queue</a>
+    {% else %}
+      <a class="btn btn-primary" href="/meetings">Go to meetings</a>
+    {% endif %}
+  {% endcall %}
+{% else %}
+<div class="split-detail">
+  <div>
+    {{ ui.ask_panel('/ask', ask, 'What did we decide about the pricing model last month?') }}
+  </div>
+
+  <aside>
+    <div class="card card-pad">
+      <h3>Memory</h3>
+      <div class="stats">
+        <div class="stat"><b>{{ memory.synced }}</b><span>meetings in memory</span></div>
+        <div class="stat"><b>{{ memory.ready }}</b><span>ready transcripts</span></div>
+        {% if memory.pending %}<div class="stat"><b>{{ memory.pending }}</b><span>ingesting</span></div>{% endif %}
+      </div>
+      {% set missing = memory.ready - memory.synced %}
+      {% if missing > 0 and not memory.pending %}
+        <form method="post" action="/memory/backfill" class="row" data-busy-form style="margin-top:var(--s3)">
+          <button class="btn btn-line btn-sm" data-busy-label="Queueing…"
+                  title="Queues one ingest job per meeting that has a ready transcript but no memory yet.">
+            Ingest {{ missing }} missing {{ 'transcript' if missing == 1 else 'transcripts' }}
+          </button>
+        </form>
+      {% elif memory.pending %}
+        <p class="small muted" style="margin-top:var(--s3)">Ingest in progress — <a href="/jobs?status=queued">queue</a>.</p>
+      {% endif %}
+      <p class="hint" style="margin-top:var(--s3)">
+        You ask as yourself: Honcho matches your Google e-mail to the same person in the participant lists,
+        so only meetings you attended are in scope. Nothing is stored about your questions here.
+      </p>
+    </div>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}
