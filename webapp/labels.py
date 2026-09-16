@@ -25,6 +25,8 @@ JOB_KINDS: dict[str, str] = {
     "cleanup_audio": "Audio cleanup",
     "repair_assets": "Audio recovery from disk",
     "repair_participants": "Participant repair",
+    "honcho_ingest": "Memory ingest",
+    "honcho_backfill": "Memory backfill",
 }
 
 JOB_STATUSES: dict[str, str] = {

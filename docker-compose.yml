@@ -5,7 +5,36 @@
 # wskazują obraz z Dockerfile, a wolumen pod /app/output. Jeśli platforma
 # nie pozwala podpiąć tego samego wolumenu pod dwa serwisy, zrób JEDEN
 # serwis z SERVICE=all.
+#
+# Pamięć spotkań (Honcho, issue #29) to osobny profil — domyślny deploy go
+# nie widzi:
+#   docker compose --profile honcho up -d
+# Cztery kontenery (pgvector, redis, api, deriver), własny wolumen bazy,
+# API tylko w sieci compose (+ 127.0.0.1:HONCHO_HOST_PORT dla lokalnego devu).
+# Wymaga OPENAI_API_KEY w .env (deriver + embeddingi) i HONCHO_ENABLED=1
+# w web/worker.
 name: earwitness
+
+# Wspólne env dla api i derivera Honcho. Modele: jedna mini-klasa dla
+# wszystkich transportów rozumowania (koszt), embeddingi z defaultu Honcho.
+x-honcho-env: &honcho-env
+  DB_CONNECTION_URI: postgresql+psycopg://honcho:honcho@honcho-db:5432/honcho
+  CACHE_URL: redis://honcho-redis:6379/0?suppress=true
+  CACHE_ENABLED: "true"
+  VECTOR_STORE_TYPE: pgvector
+  # Sieć wewnętrzna, bez tokenów — HONCHO_API_KEY w web/worker zostaje puste.
+  AUTH_USE_AUTH: "false"
+  LLM_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  DERIVER_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  SUMMARY_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DREAM_DEDUCTION_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DREAM_INDUCTION_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DIALECTIC_LEVELS__low__MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DIALECTIC_LEVELS__medium__MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DIALECTIC_LEVELS__high__MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  DIALECTIC_LEVELS__max__MODEL_CONFIG__MODEL: ${HONCHO_MODEL:-gpt-5.4-mini}
+  LOG_LEVEL: ${HONCHO_LOG_LEVEL:-INFO}
 
 services:
   web:
@@ -18,6 +47,8 @@ services:
       SERVICE: web
       # The container always listens on 8000; HOST_PORT is the local host port.
       PORT: "8000"
+      # Pamięć spotkań: w sieci compose Honcho nazywa się honcho-api.
+      HONCHO_URL: ${HONCHO_URL:-http://honcho-api:8000}
     ports:
       - "${HOST_PORT:-8000}:8000"
     volumes:
@@ -36,8 +67,81 @@ services:
     env_file: .env
     environment:
       SERVICE: worker
+      HONCHO_URL: ${HONCHO_URL:-http://honcho-api:8000}
     volumes:
       - data:/app/output
 
+  # ---------------------------------------------------------------------
+  # Profil `honcho` — pamięć spotkań. Obraz z GHCR, bez własnego builda.
+  # ---------------------------------------------------------------------
+  honcho-db:
+    image: pgvector/pgvector:pg15
+    profiles: [honcho]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: honcho
+      POSTGRES_USER: honcho
+      POSTGRES_PASSWORD: honcho
+    # Osobny wolumen — nie /app/output. Rozszerzenie `vector` zakłada sam
+    # Honcho w migracjach przy starcie api.
+    volumes:
+      - honcho-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honcho -d honcho"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  honcho-redis:
+    image: redis:8.2
+    profiles: [honcho]
+    restart: unless-stopped
+    volumes:
+      - honcho-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  honcho-api:
+    image: ghcr.io/plastic-labs/honcho:v3.2.0
+    profiles: [honcho]
+    restart: unless-stopped
+    depends_on:
+      honcho-db:
+        condition: service_healthy
+      honcho-redis:
+        condition: service_healthy
+    environment: *honcho-env
+    # Tylko localhost hosta — do lokalnego devu (`./dev.sh` + HONCHO_URL
+    # z .env) i debugowania. Na platformie ten wpis usuń.
+    ports:
+      - "127.0.0.1:${HONCHO_HOST_PORT:-8100}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Deriver = worker Honcho (reprezentacje, podsumowania, dreamy). Ten sam
+  # obraz, inny entrypoint — dokładnie jak w compose z repo Honcho.
+  honcho-deriver:
+    image: ghcr.io/plastic-labs/honcho:v3.2.0
+    profiles: [honcho]
+    restart: unless-stopped
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    depends_on:
+      honcho-api:
+        condition: service_healthy
+    environment: *honcho-env
+
 volumes:
   data:
+  honcho-db:
+  honcho-redis:

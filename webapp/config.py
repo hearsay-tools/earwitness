@@ -84,6 +84,25 @@ class Settings:
     # Ile dni wstecz zaciągamy przy autosyncu.
     sync_lookback_days: int = int(os.environ.get("SYNC_LOOKBACK_DAYS", "30"))
 
+    # --- pamięć spotkań (Honcho, opcjonalny sidecar — issue #29) ---
+    # Wyłączone = appka nie wie, że Honcho istnieje. Włączone = gotowe
+    # transkrypty lecą do Honcho, a w UI pojawia się „Ask".
+    honcho_enabled: bool = _bool("HONCHO_ENABLED", False)
+    # W compose (--profile honcho) to http://honcho-api:8000; lokalnie port
+    # z HONCHO_HOST_PORT (Honcho też domyślnie słucha na 8000, jak my).
+    honcho_url: str = os.environ.get("HONCHO_URL", "http://localhost:8100")
+    honcho_workspace: str = os.environ.get("HONCHO_WORKSPACE", "earwitness")
+    # Puste przy AUTH_USE_AUTH=false po stronie Honcho (default w compose).
+    honcho_api_key: str = os.environ.get("HONCHO_API_KEY", "")
+    # Dialektyka odpowiada sekundy, ingest dużego spotkania też chwilę trwa.
+    honcho_timeout: float = float(os.environ.get("HONCHO_TIMEOUT", "120"))
+    # minimal | low | medium | high | max — koszt i czas rosną z poziomem.
+    honcho_reasoning_level: str = os.environ.get("HONCHO_REASONING_LEVEL", "low")
+    # Czy peer ma budować reprezentacje INNYCH uczestników sesji. Potrzebne do
+    # pytań międzyspotkaniowych o to, co mówili inni; mnoży koszt derivera
+    # (obserwator × mówca). Pytania o jedno spotkanie tego nie wymagają.
+    honcho_observe_others: bool = _bool("HONCHO_OBSERVE_OTHERS", False)
+
     def __post_init__(self) -> None:
         self.recall_dir.mkdir(parents=True, exist_ok=True)
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -119,6 +138,17 @@ class Settings:
             )
         if not self.elevenlabs_api_key:
             warn.append("ELEVENLABS_API_KEY nieustawiony — pipeline nie zadziała.")
+        if self.honcho_enabled and self.honcho_reasoning_level not in (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "max",
+        ):
+            warn.append(
+                f"HONCHO_REASONING_LEVEL={self.honcho_reasoning_level!r} — "
+                "expected minimal|low|medium|high|max."
+            )
         return warn
 
 

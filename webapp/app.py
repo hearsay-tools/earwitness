@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from webapp import labels, tasks
+from webapp import labels, memory, tasks
 from webapp.app_settings import get_autoprocess, save_autoprocess
 from webapp.auth import (
     DomainNotAllowed,
@@ -78,7 +78,7 @@ async def lifespan(_app: FastAPI):
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     init_db()
-    for w in settings.validate_for_serving():
+    for w in settings.validate_for_serving() + memory.startup_warnings():
         log.warning(w)
     yield
 
@@ -476,10 +476,20 @@ def meeting_detail(
     meeting = session.get(Meeting, meeting_id)
     if meeting is None:
         raise HTTPException(404, "No such meeting")
+    return render(request, "meeting_detail.html", _meeting_page(session, meeting, user))
+
+
+def _meeting_page(
+    session: Session,
+    meeting: Meeting,
+    user: User,
+    ask: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Kontekst strony spotkania — GET i POST „Ask" renderują tę samą stronę."""
     jobs = list(
         session.execute(
             select(Job)
-            .where(Job.meeting_id == meeting_id)
+            .where(Job.meeting_id == meeting.id)
             .order_by(desc(Job.id))
             .limit(20)
         ).scalars()
@@ -491,17 +501,90 @@ def meeting_detail(
             preview = tasks.parse_transcript(tasks.transcript_text(transcript))[:12]
         except FileNotFoundError:
             preview = []
+    return {
+        "m": meeting,
+        "jobs": jobs,
+        "transcript": transcript,
+        "preview": preview,
+        "has_recording": _mixed_recording(meeting) is not None,
+        # Panel „Ask" tylko dla obecnych na spotkaniu — to oni są peerami
+        # sesji Honcho, więc tylko ich pytania mają na czym pracować.
+        "can_ask": bool(
+            settings.honcho_enabled
+            and transcript is not None
+            and memory.user_can_ask(meeting, user)
+        ),
+        "ask": ask,
+    }
+
+
+def _require_memory() -> None:
+    if not settings.honcho_enabled:
+        raise HTTPException(404, "Meeting memory is not enabled")
+
+
+def _answer(
+    user: User, question: str, meeting: Optional[Meeting] = None
+) -> dict[str, Any]:
+    """Jedno pytanie do Honcho → słownik pod `ui.ask_panel`.
+
+    Synchronicznie, bez kolejki: dialektyka odpowiada w sekundy, a odpowiedź
+    jest potrzebna w tym samym żądaniu.
+    """
+    out: dict[str, Any] = {"question": question, "answer": None, "error": None}
+    try:
+        out["answer"] = memory.ask(user, question, meeting)
+    except memory.MemoryError as e:
+        out["error"] = str(e)
+    except Exception as e:  # noqa: BLE001 — błąd sidecara nie może zdjąć strony
+        log.exception("memory ask failed")
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+@app.post("/meetings/{meeting_id}/ask", response_class=HTMLResponse)
+def meeting_ask(
+    request: Request,
+    meeting_id: str,
+    question: str = Form(""),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    _require_memory()
+    meeting = session.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "No such meeting")
+    if not memory.user_can_ask(meeting, user):
+        raise HTTPException(403, "Only attendees can ask about this meeting")
+    ask = _answer(user, question, meeting)
     return render(
-        request,
-        "meeting_detail.html",
-        {
-            "m": meeting,
-            "jobs": jobs,
-            "transcript": transcript,
-            "preview": preview,
-            "has_recording": _mixed_recording(meeting) is not None,
-        },
+        request, "meeting_detail.html", _meeting_page(session, meeting, user, ask)
     )
+
+
+@app.post("/meetings/{meeting_id}/memory")
+def meeting_memory_sync(
+    meeting_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Ręczne wgranie (albo nadpisanie) transkryptu tego spotkania w Honcho."""
+    _require_memory()
+    meeting = session.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "No such meeting")
+    transcript = meeting.latest_transcript
+    if transcript is None:
+        raise HTTPException(400, "No transcript to ingest")
+    job = enqueue(
+        session,
+        "honcho_ingest",
+        meeting_id=meeting_id,
+        args={"transcript_id": transcript.id},
+        priority=20,
+        created_by=user.email,
+    )
+    return RedirectResponse(f"/meetings/{meeting_id}?job={job.id}", status_code=303)
 
 
 @app.post("/meetings/{meeting_id}/enqueue")
@@ -871,6 +954,56 @@ def trigger_backfill_titles(
     back = request.headers.get("referer") or "/meetings"
     sep = "&" if "?" in back else "?"
     return RedirectResponse(f"{back}{sep}job={job.id}", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Pamięć spotkań (Honcho) — pytania międzyspotkaniowe
+# --------------------------------------------------------------------------
+
+
+@app.get("/ask", response_class=HTMLResponse)
+def ask_view(
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    _require_memory()
+    return render(request, "ask.html", {"ask": None, "memory": memory.status(session)})
+
+
+@app.post("/ask", response_class=HTMLResponse)
+def ask_submit(
+    request: Request,
+    question: str = Form(""),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    _require_memory()
+    return render(
+        request,
+        "ask.html",
+        {"ask": _answer(user, question), "memory": memory.status(session)},
+    )
+
+
+@app.post("/memory/backfill")
+def trigger_memory_backfill(
+    request: Request,
+    force: bool = Form(False),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Wgraj do Honcho archiwum gotowych transkryptów (patrz `honcho_backfill`)."""
+    _require_memory()
+    job = enqueue(
+        session,
+        "honcho_backfill",
+        args={"force": bool(force)},
+        priority=10,
+        dedupe_key="honcho_backfill:manual",
+        created_by=user.email,
+    )
+    return RedirectResponse(f"/jobs?highlight={job.id}", status_code=303)
 
 
 # --------------------------------------------------------------------------

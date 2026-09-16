@@ -48,6 +48,7 @@ Konfiguracja nagrywania z kalendarza: [Recall Calendar V1 — wdrożenie i migra
 | Kolejka | Zadania `sync_recall`, `sync_calendar`, `fetch_assets`, `transcribe`, `process`, `cleanup_audio`. Postęp i log na żywo, retry z backoffem, anulowanie. |
 | Transkrypty | Przeglądanie z wyszukiwaniem w treści i filtrem po mówcy, czas mówienia per osoba, pobieranie jako `.txt` / `.md` / `.vtt` / `.json` / surowy `.raw.json`. |
 | API | `/api/meetings`, `/api/jobs`, `/api/jobs/{id}/log`, `/healthz`. Swagger: `/api/docs`. |
+| Pamięć spotkań (opcjonalnie) | Gotowe transkrypty lecą do self-hostowanego [Honcho](https://github.com/plastic-labs/honcho); pytania w języku naturalnym o jedno spotkanie (panel na stronie spotkania) i o wszystkie, w których użytkownik był (`/ask`). Patrz „Pamięć spotkań (Honcho)”. |
 
 ### Skąd się biorą dane
 
@@ -75,6 +76,49 @@ a padnięty worker jest wykrywany i jego zadania wracają do kolejki.
 Concurrency to **procesy**, nie wątki: taski przechwytują `stderr` bibliotek
 (pipeline raportuje postęp printem), a `redirect_stderr` jest globalny dla
 procesu. Do tego diaryzacja jest CPU-bound, więc GIL i tak by ją zserializował.
+
+### Pamięć spotkań (Honcho) — opcjonalny sidecar
+
+Domyślnie wyłączone (`HONCHO_ENABLED` puste) — appka działa jak wcześniej.
+Po włączeniu:
+
+- każdy gotowy transkrypt dostaje job `honcho_ingest`: spotkanie = sesja
+  Honcho (id = bot_id), uczestnik = peer (id z adresu e-mail, fallback nazwa),
+  wypowiedź = message od peera mówcy z metadanymi (tytuł, znacznik czasu).
+  Ponowna transkrypcja kasuje i odtwarza sesję — pamięć nie dubluje wypowiedzi;
+- do sesji trafiają **wszyscy** ludzie ze spotkania (Recall + kalendarz),
+  także ci, którzy nic nie powiedzieli — dostęp do pamięci daje obecność;
+- **ask-as-self**: pytania idą z perspektywy peera zalogowanego użytkownika
+  (`peer.chat`), więc to Honcho ogranicza odpowiedzi do spotkań, na których
+  ten peer był. Warunek: adres z logowania Google musi być tym samym adresem,
+  który mamy przy uczestniku (`MeetingParticipant.email`) — bez dopasowanego
+  adresu użytkownik nie zobaczy własnych spotkań w pamięci;
+- `/ask` pyta międzyspotkaniowo, panel na stronie spotkania — w zakresie tej
+  jednej sesji (widoczny tylko dla obecnych). Odpowiedź przychodzi w tym
+  samym żądaniu (sekundy), bez kolejki;
+- `honcho_backfill` (przycisk na `/ask`) kolejkuje ingest dla całego archiwum
+  gotowych transkryptów, po jednym jobie na spotkanie.
+
+Uruchomienie: profil compose (cztery kontenery: pgvector, redis, api,
+deriver; własny wolumen bazy) plus dwa wpisy w `.env`:
+
+```bash
+# .env: HONCHO_ENABLED=1, OPENAI_API_KEY=sk-...   (jedyny dostawca LLM Honcho)
+docker compose --profile honcho up -d
+```
+
+Lokalnie (`./dev.sh`) API Honcho jest pod `127.0.0.1:${HONCHO_HOST_PORT:-8100}`
+i tam wskazuje domyślny `HONCHO_URL`; w sieci compose web/worker dostają
+`http://honcho-api:8000`. Pełna lista zmiennych w `.env.example`.
+
+Koszty i prywatność: deriver Honcho odpala LLM na każdej wgranej wypowiedzi
+(godzinne spotkanie to setki), a backfill archiwum to mnoży — stąd jedna
+mini-klasa modelu dla wszystkich transportów (`HONCHO_MODEL`) i wyłączone
+`HONCHO_OBSERVE_OTHERS` (reprezentacje innych uczestników mnożą koszt
+obserwator × mówca; pytania o jedno spotkanie ich nie potrzebują). Transkrypty
+— imiona i cytaty — trafiają do OpenAI. Honcho jest AGPL-3.0; jedzie jako
+osobny, niezmodyfikowany serwis z obrazu `ghcr.io/plastic-labs/honcho:v3.2.0`
+(SDK `honcho-ai` 2.4.0).
 
 ### Ograniczenia PoC
 
@@ -252,6 +296,10 @@ Lokalnie: `docker compose up --build`. Na Komodo: ten sam obraz, wolumen
 pod `/app/output`, dwa serwisy (`SERVICE=web` + `SERVICE=worker`) albo
 jeden z `SERVICE=all`. Pull wymaga `read:packages` (PAT albo GitHub App).
 
+Pamięć spotkań to osobny profil: `docker compose --profile honcho up -d`
+dokłada `honcho-db`, `honcho-redis`, `honcho-api`, `honcho-deriver` (patrz
+„Pamięć spotkań (Honcho)”). Bez profilu nic się nie zmienia.
+
 ## Struktura
 
 ```
@@ -272,7 +320,8 @@ transcripts/
 │   ├── gcal.py                # Google Calendar RO: tytuły i zaproszeni
 │   ├── recall_sync.py         # boty Recall → tabela meetings
 │   ├── jobs.py                # kolejka (enqueue/claim/retry/reap)
-│   ├── tasks.py               # fetch_assets / transcribe / process / sync
+│   ├── tasks.py               # fetch_assets / transcribe / process / sync / honcho_*
+│   ├── memory.py              # pamięć spotkań w Honcho: peerzy, ingest, pytania
 │   ├── worker.py              # proces workera (multiprocessing)
 │   ├── queries.py             # filtrowanie i wyszukiwanie spotkań
 │   ├── models.py, db.py, config.py
