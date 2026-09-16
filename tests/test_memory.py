@@ -535,6 +535,91 @@ def test_pipeline_success_queues_memory_ingest_only_when_enabled(
     assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 1
 
 
+def _ready_meeting(
+    session, tmp_path, bot_id: str, when: dt.datetime, *, synced: bool = False
+) -> Meeting:
+    m = Meeting(
+        id=bot_id,
+        title=bot_id,
+        started_at=when,
+        transcript_state="ready",
+        status_group="done",
+    )
+    path = tmp_path / f"{bot_id}.txt"
+    path.write_text("Jan [00:00:01] hi\n", encoding="utf-8")
+    t = Transcript(
+        meeting_id=bot_id,
+        text_path=str(path),
+        utterance_count=1,
+        speakers=[],
+        honcho_synced_at=dt.datetime.now(dt.timezone.utc) if synced else None,
+    )
+    session.add(m)
+    session.add(t)
+    session.commit()
+    return m
+
+
+def test_pipeline_success_queues_backfill_when_older_meetings_are_unsynced(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-march",
+        dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 0
+    backfills = session.query(Job).filter(Job.kind == "honcho_backfill").all()
+    assert [b.dedupe_key for b in backfills] == ["honcho_backfill:auto"]
+    assert job.result["memory_job"] == backfills[0].id
+
+
+def test_pipeline_success_still_ingests_when_older_meetings_are_synced(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-march",
+        dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc),
+        synced=True,
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    queued = session.query(Job).filter(Job.kind == "honcho_ingest").all()
+    assert [q.meeting_id for q in queued] == [meeting.id]
+    assert session.query(Job).filter(Job.kind == "honcho_backfill").count() == 0
+    assert job.result["memory_job"] == queued[0].id
+
+
+def test_pipeline_success_ingests_oldest_unsynced_even_if_newer_wait(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-october",
+        dt.datetime(2026, 10, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    queued = session.query(Job).filter(Job.kind == "honcho_ingest").all()
+    assert [q.meeting_id for q in queued] == [meeting.id]
+    assert session.query(Job).filter(Job.kind == "honcho_backfill").count() == 0
+
+
 def test_honcho_ingest_task_is_a_noop_when_disabled(
     session, meeting, honcho, monkeypatch
 ):
