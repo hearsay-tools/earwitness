@@ -302,17 +302,25 @@ def ingest_transcript(
     }
 
 
-def transcripts_to_sync(db: Session, *, force: bool = False) -> list[Transcript]:
-    """Najnowszy transkrypt każdego gotowego spotkania, którego nie ma w Honcho."""
+def _latest_ready_transcripts(db: Session) -> list[Transcript]:
+    """Najnowszy transkrypt każdego gotowego spotkania.
+
+    Liczy się wyłącznie najnowszy: sesja Honcho odzwierciedla jeden transkrypt,
+    a po ponownej transkrypcji stary wiersz trzyma znacznik `honcho_synced_at`
+    aż do udanego ingestu nowego. Patrzenie na dowolny wiersz ze znacznikiem
+    pokazywałoby spotkanie jako „w pamięci", gdy Honcho ma nieaktualne dane.
+    """
     meetings = db.execute(
         select(Meeting).where(Meeting.transcript_state == "ready")
     ).scalars()
-    out = []
-    for m in meetings:
-        t = m.latest_transcript
-        if t is not None and (force or t.honcho_synced_at is None):
-            out.append(t)
-    return out
+    return [m.latest_transcript for m in meetings if m.latest_transcript is not None]
+
+
+def transcripts_to_sync(db: Session, *, force: bool = False) -> list[Transcript]:
+    """Najnowszy transkrypt każdego gotowego spotkania, którego nie ma w Honcho."""
+    return [
+        t for t in _latest_ready_transcripts(db) if force or t.honcho_synced_at is None
+    ]
 
 
 def status(db: Session) -> dict[str, int]:
@@ -320,11 +328,9 @@ def status(db: Session) -> dict[str, int]:
     ready = db.execute(
         select(func.count(Meeting.id)).where(Meeting.transcript_state == "ready")
     ).scalar_one()
-    synced = db.execute(
-        select(func.count(func.distinct(Transcript.meeting_id))).where(
-            Transcript.honcho_synced_at.is_not(None)
-        )
-    ).scalar_one()
+    synced = sum(
+        1 for t in _latest_ready_transcripts(db) if t.honcho_synced_at is not None
+    )
     pending = db.execute(
         select(func.count(Job.id)).where(
             Job.kind.in_(("honcho_ingest", "honcho_backfill")),

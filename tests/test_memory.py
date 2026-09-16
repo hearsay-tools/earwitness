@@ -363,6 +363,30 @@ def test_backfill_fans_out_one_ingest_per_unsynced_meeting(session, meeting, hon
     assert forced.result["queued"] == 2
 
 
+def test_status_counts_only_the_latest_transcript_per_meeting(session, meeting, honcho):
+    """Po ponownej transkrypcji stary znacznik nie może udawać, że spotkanie
+    jest w pamięci — Honcho ma wtedy nieaktualne dane, a /ask chowałby
+    przycisk backfillu."""
+    old = meeting.latest_transcript
+    memory.ingest_transcript(session, old)
+    session.commit()
+    assert memory.status(session) == {"ready": 1, "synced": 1, "pending": 0}
+
+    session.add(
+        Transcript(
+            meeting_id=meeting.id,
+            text_path=old.text_path,
+            created_at=old.created_at + dt.timedelta(minutes=5),
+        )
+    )
+    session.commit()
+    session.expire_all()
+    assert memory.status(session) == {"ready": 1, "synced": 0, "pending": 0}
+    assert [t.id for t in memory.transcripts_to_sync(session)] == [
+        meeting.latest_transcript.id
+    ]
+
+
 def test_add_missing_columns_upgrades_an_old_schema(session):
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE transcripts DROP COLUMN honcho_synced_at"))
