@@ -34,6 +34,12 @@ def _path(name: str, default: str) -> Path:
     return p if p.is_absolute() else (REPO_ROOT / p)
 
 
+def _honcho_url_default() -> str:
+    """Bez HONCHO_URL: Honcho z profilu compose, wystawione na hoście pod
+    HONCHO_HOST_PORT — ten sam port, który czyta docker-compose.yml."""
+    return f"http://localhost:{os.environ.get('HONCHO_HOST_PORT') or '8100'}"
+
+
 @dataclass
 class Settings:
     # --- serwer ---
@@ -88,9 +94,9 @@ class Settings:
     # Wyłączone = appka nie wie, że Honcho istnieje. Włączone = gotowe
     # transkrypty lecą do Honcho, a w UI pojawia się „Ask".
     honcho_enabled: bool = _bool("HONCHO_ENABLED", False)
-    # W compose (--profile honcho) to http://honcho-api:8000; lokalnie port
-    # z HONCHO_HOST_PORT (Honcho też domyślnie słucha na 8000, jak my).
-    honcho_url: str = os.environ.get("HONCHO_URL", "http://localhost:8100")
+    # Kontenery w compose mają na sztywno http://honcho-api:8000; procesy na
+    # hoście (./dev.sh) bez HONCHO_URL idą na localhost:HONCHO_HOST_PORT.
+    honcho_url: str = os.environ.get("HONCHO_URL") or _honcho_url_default()
     honcho_workspace: str = os.environ.get("HONCHO_WORKSPACE", "earwitness")
     # Puste przy AUTH_USE_AUTH=false po stronie Honcho (default w compose).
     honcho_api_key: str = os.environ.get("HONCHO_API_KEY", "")

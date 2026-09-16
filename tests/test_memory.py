@@ -514,6 +514,15 @@ def test_add_missing_columns_survives_a_concurrent_alter(session, monkeypatch):
     }
 
 
+def test_honcho_url_default_follows_the_compose_host_port(monkeypatch):
+    from webapp.config import _honcho_url_default
+
+    monkeypatch.delenv("HONCHO_HOST_PORT", raising=False)
+    assert _honcho_url_default() == "http://localhost:8100"
+    monkeypatch.setenv("HONCHO_HOST_PORT", "9123")
+    assert _honcho_url_default() == "http://localhost:9123"
+
+
 def test_add_missing_columns_upgrades_an_old_schema(session):
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE transcripts DROP COLUMN honcho_synced_at"))

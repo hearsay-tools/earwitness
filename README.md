@@ -108,7 +108,8 @@ docker compose --profile honcho up -d
 ```
 
 Lokalnie (`./dev.sh`) API Honcho jest pod `127.0.0.1:${HONCHO_HOST_PORT:-8100}`
-i tam wskazuje domyślny `HONCHO_URL`; kontenery web/worker w compose mają
+i tam idzie appka bez `HONCHO_URL` (port bierze z tej samej zmiennej);
+kontenery web/worker w compose mają
 na sztywno `http://honcho-api:8000` (wartość z `.env` ich nie dotyczy).
 Pełna lista zmiennych w `.env.example`.
 
