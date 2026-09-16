@@ -9,6 +9,7 @@ wiadomości w limicie serwera, idempotentne nadpisanie sesji.
 from __future__ import annotations
 
 import datetime as dt
+import pathlib
 from typing import Any
 
 import pytest
@@ -385,6 +386,23 @@ def test_status_counts_only_the_latest_transcript_per_meeting(session, meeting, 
     assert [t.id for t in memory.transcripts_to_sync(session)] == [
         meeting.latest_transcript.id
     ]
+
+
+def test_compose_points_containers_at_honcho_api():
+    """`${HONCHO_URL}` brałby adres z .env (localhost:HONCHO_HOST_PORT), który
+    w kontenerze wskazuje sam kontener Earwitness, nie Honcho."""
+    import yaml
+
+    compose = yaml.safe_load(
+        (
+            pathlib.Path(__file__).resolve().parent.parent / "docker-compose.yml"
+        ).read_text()
+    )
+    for name in ("web", "worker"):
+        assert (
+            compose["services"][name]["environment"]["HONCHO_URL"]
+            == "http://honcho-api:8000"
+        )
 
 
 def test_add_missing_columns_upgrades_an_old_schema(session):

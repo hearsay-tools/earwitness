@@ -47,8 +47,10 @@ services:
       SERVICE: web
       # The container always listens on 8000; HOST_PORT is the local host port.
       PORT: "8000"
-      # Pamięć spotkań: w sieci compose Honcho nazywa się honcho-api.
-      HONCHO_URL: ${HONCHO_URL:-http://honcho-api:8000}
+      # Pamięć spotkań: w sieci compose Honcho nazywa się honcho-api. Literał,
+      # nie ${HONCHO_URL}: compose interpoluje z .env, a tam siedzi adres dla
+      # hosta (localhost:HONCHO_HOST_PORT), który w kontenerze wskazuje nas.
+      HONCHO_URL: http://honcho-api:8000
     ports:
       - "${HOST_PORT:-8000}:8000"
     volumes:
@@ -67,7 +69,7 @@ services:
     env_file: .env
     environment:
       SERVICE: worker
-      HONCHO_URL: ${HONCHO_URL:-http://honcho-api:8000}
+      HONCHO_URL: http://honcho-api:8000
     volumes:
       - data:/app/output
 
