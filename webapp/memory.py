@@ -206,7 +206,10 @@ def ingest_transcript(
     jest kasowana i tworzona od nowa, więc ponowna transkrypcja nadpisuje
     pamięć zamiast dokładać drugi komplet wypowiedzi.
 
-    Nie robi `commit` — to rola taska (jeden commit na koniec joba).
+    Jeden `commit` w środku, celowo: znaczniki `honcho_synced_at` znikają
+    i idą do bazy ZANIM skasujemy starą sesję. Gdyby Honcho padło między
+    delete a create, rollback joba przywróciłby „w pamięci" nad sesją, której
+    już nie ma — a backfill by ją pominął. Znacznik sukcesu zapisuje task.
     """
     from honcho import NotFoundError
     from honcho.api_types import SessionPeerConfig
@@ -250,7 +253,10 @@ def ingest_transcript(
             speaker_peer[u["speaker"]] = ensure_peer(key, email, name)
     step(20, f"peers: {len(peers)} ({len(speaker_peer)} speaking)")
 
-    # Sesja od zera.
+    # Sesja od zera. Najpierw znaczniki — patrz docstring.
+    for t in meeting.transcripts:
+        t.honcho_synced_at = None
+    db.commit()
     try:
         h.session(meeting.id).delete()
         log_line("previous Honcho session removed")

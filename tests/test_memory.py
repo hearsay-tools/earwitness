@@ -89,6 +89,7 @@ class FakeSession:
 class FakeHoncho:
     def __init__(self, not_found_cls: type[Exception]) -> None:
         self.not_found_cls = not_found_cls
+        self.create_error: Exception | None = None
         self.peers: dict[str, FakePeer] = {}
         self.sessions: dict[str, FakeSession] = {}
         self.deleted: list[str] = []
@@ -114,6 +115,8 @@ class FakeHoncho:
         if metadata is None and peers is None:
             # Leniwe uchwyty, jak w SDK — nie tworzą sesji po stronie serwera.
             return self.sessions.get(id) or FakeSession(self, id)
+        if self.create_error is not None:
+            raise self.create_error
         self.sessions[id] = FakeSession(self, id, metadata, peers)
         return self.sessions[id]
 
@@ -297,6 +300,29 @@ def test_ingest_marks_only_the_transcript_the_session_reflects(
 # --------------------------------------------------------------------------
 # Kolejka
 # --------------------------------------------------------------------------
+
+
+def test_failed_reingest_does_not_leave_the_meeting_marked_as_in_memory(
+    session, meeting, honcho
+):
+    """Delete poszło, create padło: Honcho nie ma już sesji, więc baza też
+    nie może twierdzić, że spotkanie jest w pamięci — inaczej backfill je
+    pominie na zawsze."""
+    from honcho import ServerError
+
+    t = meeting.latest_transcript
+    memory.ingest_transcript(session, t)
+    session.commit()
+    assert t.honcho_synced_at is not None
+
+    honcho.create_error = ServerError("boom")
+    with pytest.raises(ServerError):
+        memory.ingest_transcript(session, t)
+    session.rollback()  # to samo robi `run_job` po wyjątku z taska
+    session.expire_all()
+    assert meeting.id in honcho.deleted
+    assert session.get(Transcript, t.id).honcho_synced_at is None
+    assert [x.id for x in memory.transcripts_to_sync(session)] == [t.id]
 
 
 def test_new_transcript_gets_its_own_ingest_while_the_old_one_runs(
