@@ -83,6 +83,8 @@ class FakeSession:
         assert len(messages) <= memory.MESSAGE_BATCH, "batch above the server limit"
         self.batches.append(len(messages))
         self.messages.extend(messages)
+        if self.hub.on_add_messages is not None:
+            self.hub.on_add_messages()
         return messages
 
 
@@ -90,6 +92,7 @@ class FakeHoncho:
     def __init__(self, not_found_cls: type[Exception]) -> None:
         self.not_found_cls = not_found_cls
         self.create_error: Exception | None = None
+        self.on_add_messages: Any = None
         self.peers: dict[str, FakePeer] = {}
         self.sessions: dict[str, FakeSession] = {}
         self.deleted: list[str] = []
@@ -366,9 +369,46 @@ def test_ingest_waits_for_another_running_ingest_of_the_same_meeting(
     job = memory.queue_ingest(session, meeting, t.id, priority=50, created_by="t")
     J.run_job(session, J.claim(session, "w1"))
     assert job.status == "queued", "ma wrócić do kolejki, nie paść na twardo"
-    assert job.attempts == 1 and job.max_attempts == 5
-    assert "still running" in (job.error or "")
+    # Czekanie nie zużywa próby: długi poprzednik nie może wyczerpać retry
+    # i zostawić najnowszego transkryptu w stanie `failed` na zawsze.
+    assert job.attempts == 0 and job.error is None
+    assert job.step.startswith("waiting:") and "still running" in job.step
+    assert job.scheduled_at > dt.datetime.now(dt.timezone.utc)
     assert honcho.sessions == {}
+
+
+def test_finished_ingest_hands_off_to_a_transcript_that_appeared_meanwhile(
+    session, meeting, honcho
+):
+    """Zamyka wyścig „czekający odłożył się, poprzednik już sprawdził": to
+    poprzednik na koniec kolejkuje najnowszy transkrypt."""
+    old = meeting.latest_transcript
+    job = memory.queue_ingest(session, meeting, old.id, priority=50, created_by="t")
+    created: dict[str, int] = {}
+
+    def add_new_transcript_midway():
+        if created:
+            return
+        from webapp.db import SessionLocal
+
+        with SessionLocal() as other:
+            t = Transcript(
+                meeting_id=meeting.id,
+                text_path=old.text_path,
+                created_at=old.created_at + dt.timedelta(minutes=5),
+            )
+            other.add(t)
+            other.commit()
+            created["id"] = t.id
+
+    honcho.on_add_messages = add_new_transcript_midway
+    J.run_job(session, J.claim(session, "w1"))
+    assert job.status == "done"
+    follow = session.get(Job, job.result["follow_up"])
+    assert follow.kind == "honcho_ingest" and follow.args == {
+        "transcript_id": created["id"]
+    }
+    assert follow.status == "queued"
 
 
 def test_pipeline_success_queues_memory_ingest_only_when_enabled(

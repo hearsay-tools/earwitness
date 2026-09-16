@@ -32,7 +32,7 @@ from transcripts.transcribe import transcribe as elevenlabs_transcribe
 from webapp import memory
 from webapp.app_settings import get_autoprocess
 from webapp.config import settings
-from webapp.jobs import JobContext, enqueue, task
+from webapp.jobs import JobContext, RetryLater, enqueue, task
 from webapp.models import Meeting, Transcript, User, utcnow
 from webapp.recall_sync import (
     adopt_disk_recording,
@@ -580,9 +580,7 @@ def honcho_ingest(ctx: JobContext) -> dict[str, Any]:
     # drugi wraca do kolejki z backoffem (patrz `memory.queue_ingest`).
     other = memory.running_ingest(ctx.session, meeting.id, exclude=ctx.job.id)
     if other is not None:
-        raise RuntimeError(
-            f"memory ingest #{other} is still running for this meeting — retry later"
-        )
+        raise RetryLater(f"memory ingest #{other} still running for this meeting")
     ctx.progress(
         5, "reading transcript", f"transcript #{transcript.id}: {meeting.title}"
     )
@@ -593,6 +591,18 @@ def honcho_ingest(ctx: JobContext) -> dict[str, Any]:
         progress=ctx.progress,
     )
     ctx.session.commit()
+    # Ponowna transkrypcja mogła skończyć się w trakcie tego ingestu. Jej job
+    # stoi w kolejce albo właśnie się odłożył (`RetryLater`) — dokładamy
+    # (deduplikacja odda istniejący), żeby żaden stan wyścigu nie zostawił
+    # Honcho ze starym tekstem.
+    ctx.session.expire(meeting)
+    latest = meeting.latest_transcript
+    if latest is not None and latest.id != transcript.id:
+        follow = memory.queue_ingest(
+            ctx.session, meeting, latest.id, priority=50, created_by="automatic"
+        )
+        ctx.log(f"newer transcript #{latest.id} appeared — queued ingest #{follow.id}")
+        result["follow_up"] = follow.id
     ctx.progress(100, "done", json.dumps(result, ensure_ascii=False))
     return result
 

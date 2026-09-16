@@ -262,6 +262,31 @@ def finish(session: Session, job: Job, result: Optional[dict[str, Any]] = None) 
     session.commit()
 
 
+class RetryLater(Exception):
+    """Task chce poczekać, nie padł: wraca do kolejki bez zużycia próby.
+
+    Do czekania na cudzy stan (inny job tego samego spotkania jeszcze biegnie).
+    Zwykły retry z `fail()` liczy próby i po `max_attempts` kończy się twardą
+    porażką — czekanie 40 minut na długi ingest nie może być błędem zadania.
+    """
+
+    def __init__(self, reason: str, delay_seconds: float = 30.0) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.delay_seconds = delay_seconds
+
+
+def defer(session: Session, job: Job, reason: str, delay_seconds: float) -> None:
+    """Odłóż zadanie na później. `claim()` policzył próbę — oddajemy ją."""
+    job.status = JOB_QUEUED
+    job.attempts = max(0, job.attempts - 1)
+    job.scheduled_at = utcnow() + dt.timedelta(seconds=delay_seconds)
+    job.step = f"waiting: {reason}"[:200]
+    job.worker_id = None
+    job.heartbeat_at = utcnow()
+    session.commit()
+
+
 def fail(session: Session, job: Job, error: str, allow_retry: bool = True) -> None:
     """Oznacz porażkę. Retry z backoffem 30s / 2min / 8min, potem twardy fail."""
     job.error = error[-8000:]
@@ -383,6 +408,12 @@ def run_job(session: Session, job: Job) -> None:
     )
     try:
         result = fn(ctx) or {}
+    except RetryLater as e:
+        session.rollback()
+        job = session.get(Job, job.id)
+        log.info("job %s (%s) deferred: %s", job.id, job.kind, e.reason)
+        defer(session, job, e.reason, e.delay_seconds)
+        return
     except Exception as e:  # noqa: BLE001 — worker nie może paść przez jeden task
         session.rollback()
         job = session.get(Job, job.id)

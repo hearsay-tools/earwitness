@@ -331,7 +331,9 @@ def queue_ingest(
     z `enqueue()` ten *biegnący* job (argumentów biegnącego nie ruszamy) —
     stary transkrypt wszedłby do Honcho, a nowy nigdy. Dwa joby na jedno
     spotkanie nie biegną naraz: task sprawdza `running_ingest()` i odkłada
-    się na retry, a przestarzały transkrypt pomija (`latest_transcript`).
+    się (`RetryLater`, bez zużycia próby), a przestarzały transkrypt pomija
+    (`latest_transcript`). Ingest, który skończył, sam kolejkuje nowszy
+    transkrypt, jeśli taki pojawił się w trakcie.
     """
     from webapp.jobs import enqueue
 
@@ -342,9 +344,6 @@ def queue_ingest(
         args={"transcript_id": transcript_id},
         priority=priority,
         dedupe_key=f"honcho_ingest:{meeting.id}:{transcript_id}",
-        # Retry służy też do czekania na inny ingest tego spotkania
-        # (30 s / 2 min / 8 min / 30 min), nie tylko na padnięte Honcho.
-        max_attempts=5,
         created_by=created_by,
     )
 
