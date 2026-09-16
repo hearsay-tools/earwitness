@@ -576,13 +576,8 @@ def meeting_memory_sync(
     transcript = meeting.latest_transcript
     if transcript is None:
         raise HTTPException(400, "No transcript to ingest")
-    job = enqueue(
-        session,
-        "honcho_ingest",
-        meeting_id=meeting_id,
-        args={"transcript_id": transcript.id},
-        priority=20,
-        created_by=user.email,
+    job = memory.queue_ingest(
+        session, meeting, transcript.id, priority=20, created_by=user.email
     )
     return RedirectResponse(f"/meetings/{meeting_id}?job={job.id}", status_code=303)
 

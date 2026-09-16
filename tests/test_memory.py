@@ -299,6 +299,52 @@ def test_ingest_marks_only_the_transcript_the_session_reflects(
 # --------------------------------------------------------------------------
 
 
+def test_new_transcript_gets_its_own_ingest_while_the_old_one_runs(
+    session, meeting, honcho
+):
+    """Klucz per spotkanie oddałby biegnący job ze starym transcript_id
+    i nowy transkrypt nigdy nie trafiłby do Honcho."""
+    old = meeting.latest_transcript
+    first = memory.queue_ingest(session, meeting, old.id, priority=50, created_by="t")
+    claimed = J.claim(session, "w1")
+    assert claimed.id == first.id
+
+    new = Transcript(
+        meeting_id=meeting.id,
+        text_path=old.text_path,
+        created_at=old.created_at + dt.timedelta(minutes=5),
+    )
+    session.add(new)
+    session.commit()
+    session.expire_all()
+    second = memory.queue_ingest(session, meeting, new.id, priority=50, created_by="t")
+    assert second.id != first.id, "nowy transkrypt musi dostać własny job"
+
+    # Stary job widzi, że go wyprzedzono — nie wgrywa przestarzałego tekstu.
+    J.run_job(session, claimed)
+    assert claimed.result == {"skipped": "superseded", "latest": new.id}
+    assert honcho.sessions == {}
+
+    J.run_job(session, J.claim(session, "w1"))
+    assert second.status == "done"
+    assert len(honcho.sessions[meeting.id].messages) == old.utterance_count
+
+
+def test_ingest_waits_for_another_running_ingest_of_the_same_meeting(
+    session, meeting, honcho
+):
+    """Dwa ingesty naraz kasowałyby sobie sesję Honcho nawzajem."""
+    t = meeting.latest_transcript
+    session.add(Job(kind="honcho_ingest", status="running", meeting_id=meeting.id))
+    session.commit()
+    job = memory.queue_ingest(session, meeting, t.id, priority=50, created_by="t")
+    J.run_job(session, J.claim(session, "w1"))
+    assert job.status == "queued", "ma wrócić do kolejki, nie paść na twardo"
+    assert job.attempts == 1 and job.max_attempts == 5
+    assert "still running" in (job.error or "")
+    assert honcho.sessions == {}
+
+
 def test_pipeline_success_queues_memory_ingest_only_when_enabled(
     session, meeting, honcho, monkeypatch
 ):

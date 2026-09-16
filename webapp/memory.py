@@ -41,7 +41,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from webapp.config import settings
-from webapp.models import ACTIVE_JOB_STATES, Job, Meeting, Transcript, User, utcnow
+from webapp.models import (
+    ACTIVE_JOB_STATES,
+    JOB_RUNNING,
+    Job,
+    Meeting,
+    Transcript,
+    User,
+    utcnow,
+)
 
 log = logging.getLogger("webapp.memory")
 
@@ -300,6 +308,51 @@ def ingest_transcript(
         "messages": sent,
         "silent_attendees": len(peers) - len(speaker_peer),
     }
+
+
+def queue_ingest(
+    db: Session,
+    meeting: Meeting,
+    transcript_id: int,
+    *,
+    priority: int,
+    created_by: Optional[str],
+) -> Job:
+    """Zakolejkuj ingest konkretnego transkryptu.
+
+    Klucz deduplikacji zawiera id transkryptu, nie tylko spotkania: gdyby był
+    per spotkanie, ponowna transkrypcja w trakcie trwającego ingestu dostałaby
+    z `enqueue()` ten *biegnący* job (argumentów biegnącego nie ruszamy) —
+    stary transkrypt wszedłby do Honcho, a nowy nigdy. Dwa joby na jedno
+    spotkanie nie biegną naraz: task sprawdza `running_ingest()` i odkłada
+    się na retry, a przestarzały transkrypt pomija (`latest_transcript`).
+    """
+    from webapp.jobs import enqueue
+
+    return enqueue(
+        db,
+        "honcho_ingest",
+        meeting_id=meeting.id,
+        args={"transcript_id": transcript_id},
+        priority=priority,
+        dedupe_key=f"honcho_ingest:{meeting.id}:{transcript_id}",
+        # Retry służy też do czekania na inny ingest tego spotkania
+        # (30 s / 2 min / 8 min / 30 min), nie tylko na padnięte Honcho.
+        max_attempts=5,
+        created_by=created_by,
+    )
+
+
+def running_ingest(db: Session, meeting_id: str, *, exclude: int) -> Optional[int]:
+    """Id innego biegnącego `honcho_ingest` dla spotkania albo None."""
+    return db.execute(
+        select(Job.id).where(
+            Job.kind == "honcho_ingest",
+            Job.meeting_id == meeting_id,
+            Job.status == JOB_RUNNING,
+            Job.id != exclude,
+        )
+    ).scalar()
 
 
 def _latest_ready_transcripts(db: Session) -> list[Transcript]:

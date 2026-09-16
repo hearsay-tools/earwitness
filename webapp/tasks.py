@@ -309,13 +309,8 @@ def _queue_memory_ingest(
     """
     if not settings.honcho_enabled:
         return None
-    job = enqueue(
-        ctx.session,
-        "honcho_ingest",
-        meeting_id=meeting.id,
-        args={"transcript_id": transcript_id},
-        priority=50,
-        created_by="automatic",
+    job = memory.queue_ingest(
+        ctx.session, meeting, transcript_id, priority=50, created_by="automatic"
     )
     ctx.log(f"memory ingest queued (job #{job.id})")
     return job.id
@@ -573,6 +568,21 @@ def honcho_ingest(ctx: JobContext) -> dict[str, Any]:
     )
     if transcript is None or transcript.meeting_id != meeting.id:
         raise RuntimeError("no transcript to ingest for this meeting")
+    # Sesja Honcho odzwierciedla jeden transkrypt — najnowszy. Job na starszy
+    # (ponowna transkrypcja zdążyła przed nim) ma własny następca w kolejce.
+    latest = meeting.latest_transcript
+    if latest is not None and latest.id != transcript.id:
+        ctx.progress(
+            100, "skipped", f"transcript #{transcript.id} superseded by #{latest.id}"
+        )
+        return {"skipped": "superseded", "latest": latest.id}
+    # Dwa ingesty jednego spotkania naraz kasowałyby sobie sesję nawzajem —
+    # drugi wraca do kolejki z backoffem (patrz `memory.queue_ingest`).
+    other = memory.running_ingest(ctx.session, meeting.id, exclude=ctx.job.id)
+    if other is not None:
+        raise RuntimeError(
+            f"memory ingest #{other} is still running for this meeting — retry later"
+        )
     ctx.progress(
         5, "reading transcript", f"transcript #{transcript.id}: {meeting.title}"
     )
@@ -601,11 +611,10 @@ def honcho_backfill(ctx: JobContext) -> dict[str, Any]:
     ctx.progress(10, "finding transcripts to ingest")
     todo = memory.transcripts_to_sync(ctx.session, force=force)
     for t in todo:
-        enqueue(
+        memory.queue_ingest(
             ctx.session,
-            "honcho_ingest",
-            meeting_id=t.meeting_id,
-            args={"transcript_id": t.id},
+            t.meeting,
+            t.id,
             priority=90,
             created_by=ctx.job.created_by or "backfill",
         )
