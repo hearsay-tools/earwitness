@@ -75,7 +75,7 @@ class FakeSession:
         self.set_peers_calls = 0
 
     def peers(self) -> list[FakePeer]:
-        if self.id not in self.hub.sessions:
+        if self.id not in self.hub._sessions:
             raise self.hub.not_found_cls("no such session")
         return [p for p, _cfg in self._peers]
 
@@ -84,10 +84,15 @@ class FakeSession:
         self._peers = list(peers)
 
     def delete(self) -> None:
-        if self.id not in self.hub.sessions:
+        if self.id not in self.hub._sessions:
             raise self.hub.not_found_cls("no such session")
         self.hub.deleted.append(self.id)
-        del self.hub.sessions[self.id]
+        del self.hub._sessions[self.id]
+        # Soft delete, jak w serwerze: wiersz zostaje (`is_active=False`),
+        # a asynchroniczny deriver usuwa go fizycznie dopiero po kilku
+        # kolejnych wywołaniach klienta.
+        self.hub.inactive.add(self.id)
+        self.hub._deriver_calls[self.id] = 2
 
     def add_messages(self, messages: list[dict]) -> list[dict]:
         assert len(messages) <= memory.MESSAGE_BATCH, "batch above the server limit"
@@ -99,16 +104,34 @@ class FakeSession:
 
 
 class FakeHoncho:
+    """Semantyki klienta jak w serwerze Honcho (v3.2.0), nie jak w optymistycznym
+    docstringu SDK: `session()` to get-or-create — leniwe wywołanie tworzy pustą
+    sesję, a dopóki istnieje soft-deleted wiersz, get-or-create odpowiada 404
+    zamiast tworzyć. Bez tego atrapka nie łapała issue #35.
+    """
+
     def __init__(self, not_found_cls: type[Exception]) -> None:
         self.not_found_cls = not_found_cls
         self.create_error: Exception | None = None
         self.on_add_messages: Any = None
         self.peers: dict[str, FakePeer] = {}
-        self.sessions: dict[str, FakeSession] = {}
+        self._sessions: dict[str, FakeSession] = {}
+        # Wiersze soft-deleted, czekające na fizyczne usunięcie przez derivera.
+        self.inactive: set[str] = set()
+        self._deriver_calls: dict[str, int] = {}
         self.deleted: list[str] = []
         self.chats: list[dict] = []
         self.chat_answer: str | None = "We agreed to ship on Friday."
         self.chat_error: Exception | None = None
+
+    def _deriver_tick(self) -> None:
+        """Pracownik asynchronicznego usuwania: przy każdym ruchu klienta
+        zbliża się o krok do fizycznego usunięcia wiersza."""
+        for sid in list(self.inactive):
+            self._deriver_calls[sid] -= 1
+            if self._deriver_calls[sid] <= 0:
+                self.inactive.discard(sid)
+                del self._deriver_calls[sid]
 
     def peer(
         self, id: str, *, metadata: Any = None, configuration: Any = None
@@ -125,13 +148,36 @@ class FakeHoncho:
         peers: Any = None,
         configuration: Any = None,
     ) -> FakeSession:
+        self._deriver_tick()
+        if id in self.inactive:
+            # Soft-deleted wiersz wciąż w bazie serwera — get-or-create
+            # nie tworzy, tylko zwraca 404.
+            raise self.not_found_cls(f"Session {id} not found in workspace")
         if metadata is None and peers is None:
-            # Leniwe uchwyty, jak w SDK — nie tworzą sesji po stronie serwera.
-            return self.sessions.get(id) or FakeSession(self, id)
+            # Leniwy get-or-create: bez wiersza tworzy pustą sesję.
+            return self._sessions.setdefault(id, FakeSession(self, id))
         if self.create_error is not None:
             raise self.create_error
-        self.sessions[id] = FakeSession(self, id, metadata, peers)
-        return self.sessions[id]
+        existing = self._sessions.get(id)
+        if existing is not None:
+            # Istniejąca aktywna sesja: metadane nadpisywane, peerzy dokładani.
+            if metadata is not None:
+                existing.metadata = metadata
+            if peers is not None:
+                have = {p.id for p, _cfg in existing._peers}
+                existing._peers += [(p, cfg) for p, cfg in peers if p.id not in have]
+            return existing
+        self._sessions[id] = FakeSession(self, id, metadata, peers)
+        return self._sessions[id]
+
+    def sessions(self, filters: Any = None, **_: Any) -> list[FakeSession]:
+        """Listowanie jak w serwerze: tylko aktywne wiersze, nic nie tworzy."""
+        self._deriver_tick()
+        items = list(self._sessions.values())
+        for key, value in (filters or {}).items():
+            column = {"name": "id"}.get(key, key)
+            items = [s for s in items if getattr(s, column) == value]
+        return items
 
 
 @pytest.fixture()
@@ -254,7 +300,7 @@ def test_ingest_builds_one_session_per_meeting_with_every_attendee(
     result = memory.ingest_transcript(session, t)
     session.commit()
 
-    sess = honcho.sessions[meeting.id]
+    sess = honcho._sessions[meeting.id]
     assert sess.metadata["title"] == "Roadmap sync"
     peer_ids = {p.id for p in sess.peers()}
     # Obecność daje dostęp: Ola (tylko zaproszona) też jest w sesji, bot nie.
@@ -282,7 +328,7 @@ def test_ingest_uses_join_at_when_started_at_is_missing(session, meeting, honcho
     meeting.join_at = dt.datetime(2026, 4, 1, 9, 0, tzinfo=dt.timezone.utc)
     session.commit()
     memory.ingest_transcript(session, meeting.latest_transcript)
-    first = honcho.sessions[meeting.id].messages[0]
+    first = honcho._sessions[meeting.id].messages[0]
     assert first["created_at"] == meeting.join_at + dt.timedelta(seconds=1)
 
 
@@ -295,20 +341,54 @@ def test_ingest_without_meeting_time_logs_ingest_time_fallback(
     job = J.enqueue(session, "honcho_ingest", meeting_id=meeting.id)
     J.run_job(session, J.claim(session, "w1", kinds=["honcho_ingest"]))
     assert job.status == "done"
-    assert honcho.sessions[meeting.id].messages[0]["created_at"] is None
+    assert honcho._sessions[meeting.id].messages[0]["created_at"] is None
     assert "ingest time" in (job.log or "")
 
 
 def test_reingest_recreates_the_session(session, meeting, honcho):
-    """Ponowna transkrypcja nie może dołożyć drugiego kompletu wypowiedzi."""
+    """Ponowna transkrypcja nie może dołożyć drugiego kompletu wypowiedzi.
+
+    Pod atrapą z semantyką serwera (issue #35) re-ingest przechodzi przez
+    okno soft-delete: create tuż po delete dostaje 404 i musi poczekać, aż
+    deriver fizycznie usunie stary wiersz."""
     memory.ingest_transcript(session, meeting.latest_transcript)
     assert honcho.deleted == []
     memory.ingest_transcript(session, meeting.latest_transcript)
     assert honcho.deleted == [meeting.id]
+    assert honcho.inactive == set(), "soft-deleted wiersz musiał zniknąć"
     assert (
-        len(honcho.sessions[meeting.id].messages)
+        len(honcho._sessions[meeting.id].messages)
         == meeting.latest_transcript.utterance_count
     )
+
+
+def test_ingest_of_a_meeting_without_a_honcho_session_succeeds(
+    session, meeting, honcho
+):
+    """#35: ingest spotkania, dla którego Honcho nie ma jeszcze sesji, musi
+    się zakończyć sukcesem.
+
+    Serwerowe DELETE to soft delete, a leniwe `h.session()` to get-or-create:
+    stara ścieżka „delete, potem create" tworzyła pustą sesję, soft-deleteda
+    ją, a następny get-or-create zamiast utworzyć sesję odpowiadał
+    `NotFoundError: Session ... not found in workspace`.
+    """
+    t = meeting.latest_transcript
+    result = memory.ingest_transcript(session, t)
+    session.commit()
+
+    assert honcho.inactive == set(), "nie wolno zostawiać soft-deleted wiersza"
+    sess = honcho._sessions[meeting.id]
+    # Sesja utworzona z metadanami i kompletem uczestników PRZED wiadomościami.
+    assert sess.metadata["title"] == "Roadmap sync"
+    assert sess.metadata["transcript_id"] == t.id
+    assert {p.id for p in sess.peers()} == {
+        memory.peer_id("jan@acme.com"),
+        memory.peer_id("guest speaker"),
+        memory.peer_id("ola@acme.com"),
+    }
+    assert len(sess.messages) == result["messages"] == t.utterance_count
+    assert t.honcho_synced_at is not None
 
 
 def test_ingest_marks_only_the_transcript_the_session_reflects(
@@ -384,11 +464,11 @@ def test_new_transcript_gets_its_own_ingest_while_the_old_one_runs(
     # Stary job widzi, że go wyprzedzono — nie wgrywa przestarzałego tekstu.
     J.run_job(session, claimed)
     assert claimed.result == {"skipped": "superseded", "latest": new.id}
-    assert honcho.sessions == {}
+    assert honcho._sessions == {}
 
     J.run_job(session, J.claim(session, "w1"))
     assert second.status == "done"
-    assert len(honcho.sessions[meeting.id].messages) == old.utterance_count
+    assert len(honcho._sessions[meeting.id].messages) == old.utterance_count
 
 
 def test_ingest_waits_for_another_running_ingest_of_the_same_meeting(
@@ -406,7 +486,7 @@ def test_ingest_waits_for_another_running_ingest_of_the_same_meeting(
     assert job.attempts == 0 and job.error is None
     assert job.step.startswith("waiting:") and "still running" in job.step
     assert job.scheduled_at > dt.datetime.now(dt.timezone.utc)
-    assert honcho.sessions == {}
+    assert honcho._sessions == {}
 
 
 def test_finished_ingest_hands_off_to_a_transcript_that_appeared_meanwhile(
@@ -450,7 +530,7 @@ def test_sync_peers_reconciles_membership_with_the_participant_list(
     do sesji, usunięty uczestnik ma z niej wypaść."""
     memory.ingest_transcript(session, meeting.latest_transcript)
     session.commit()
-    sess = honcho.sessions[meeting.id]
+    sess = honcho._sessions[meeting.id]
     assert memory.sync_peers(session, meeting) == {"changed": False, "peers": 3}
     assert sess.set_peers_calls == 0, "bez różnicy nie ma zapisu"
 
@@ -493,7 +573,7 @@ def test_backfill_reconciles_rosters_of_ingested_meetings(session, meeting, honc
     J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
     assert job.result == {"queued": 0, "reconciled": 1, "force": False}
     assert memory.peer_id("new@acme.com") in {
-        p.id for p in honcho.sessions[meeting.id].peers()
+        p.id for p in honcho._sessions[meeting.id].peers()
     }
 
 
@@ -627,7 +707,7 @@ def test_honcho_ingest_task_is_a_noop_when_disabled(
     job = J.enqueue(session, "honcho_ingest", meeting_id=meeting.id)
     J.run_job(session, J.claim(session, "w1"))
     assert job.status == "done" and job.result == {"skipped": True}
-    assert honcho.sessions == {}
+    assert honcho._sessions == {}
 
 
 def test_backfill_fans_out_one_ingest_per_unsynced_meeting(session, meeting, honcho):
@@ -882,7 +962,7 @@ def test_meeting_ask_panel_is_for_attendees_only(
     assert honcho.chats[-1]["session"] == meeting.id
     # Zalogowany dołączył do listy po ingeście — przed pytaniem sesja ma go
     # już jako członka, inaczej „ask-as-self" nie ma na czym pracować.
-    ids = {p.id for p in honcho.sessions[meeting.id].peers()}
+    ids = {p.id for p in honcho._sessions[meeting.id].peers()}
     assert memory.peer_id("dev@localhost") in ids
 
 
