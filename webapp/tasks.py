@@ -395,6 +395,8 @@ def sync_recall(ctx: JobContext) -> dict[str, Any]:
         ctx.log(
             f"emails matched: {ident['matched']}, without an email: {ident['left']}"
         )
+        if ident["matched"]:
+            memory.queue_backfill(ctx.session, created_by="sync")
 
     if get_autoprocess(ctx.session):
         queued = _autoqueue(ctx)
@@ -494,6 +496,8 @@ def repair_participants(ctx: JobContext) -> dict[str, Any]:
     ctx.progress(60, "recomputing identity keys")
     result = repair_participant_keys(ctx.session)
     result.update(matched)
+    if matched["matched"] or result.get("rekeyed") or result.get("merged"):
+        memory.queue_backfill(ctx.session, created_by="repair_participants")
     ctx.progress(100, "done", json.dumps(result, ensure_ascii=False))
     return result
 
@@ -628,8 +632,23 @@ def honcho_backfill(ctx: JobContext) -> dict[str, Any]:
             priority=90,
             created_by=ctx.job.created_by or "backfill",
         )
-    ctx.progress(100, "done", f"queued {len(todo)} memory ingests")
-    return {"queued": len(todo), "force": force}
+    # Wgrane spotkania: dopasuj członków sesji do aktualnych uczestników.
+    ctx.progress(50, "reconciling session members", f"queued {len(todo)} ingests")
+    queued_ids = {t.id for t in todo}
+    reconciled = 0
+    for t in memory.transcripts_to_sync(ctx.session, force=True):
+        if t.id in queued_ids:
+            continue
+        outcome = memory.sync_peers(ctx.session, t.meeting)
+        if outcome.get("changed"):
+            reconciled += 1
+            ctx.log(
+                f"{t.meeting.title}: +{len(outcome['added'])} / -{len(outcome['removed'])} peers"
+            )
+    ctx.progress(
+        100, "done", f"queued {len(todo)} memory ingests, {reconciled} rosters updated"
+    )
+    return {"queued": len(todo), "reconciled": reconciled, "force": force}
 
 
 # --------------------------------------------------------------------------

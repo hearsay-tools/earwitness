@@ -556,6 +556,12 @@ def meeting_ask(
         raise HTTPException(404, "No such meeting")
     if not memory.user_can_ask(meeting, user):
         raise HTTPException(403, "Only attendees can ask about this meeting")
+    # Lista uczestników mogła się zmienić od ingestu (adres dopięty do nazwy,
+    # zaproszony z kalendarza) — sesja ma odzwierciedlać ją teraz, nie wtedy.
+    try:
+        memory.sync_peers(session, meeting)
+    except Exception as e:  # noqa: BLE001 — pytanie i tak pokaże błąd Honcho
+        log.warning("sync_peers before ask failed: %s", e)
     ask = _answer(user, question, meeting)
     return render(
         request, "meeting_detail.html", _meeting_page(session, meeting, user, ask)

@@ -195,6 +195,89 @@ def _session_metadata(meeting: Meeting, transcript: Transcript) -> dict[str, Any
     }
 
 
+def _roster_ids(meeting: Meeting, utterances: list[dict[str, Any]]) -> set[str]:
+    """Kto ma być w sesji: wszyscy ludzie ze spotkania + mówcy spoza listy."""
+    ids = {peer_id(identity_key(p.name, p.email)) for p in meeting.human_participants}
+    resolve = _speaker_resolver(meeting)
+    ids |= {peer_id(resolve(u["speaker"])[0]) for u in utterances}
+    return ids
+
+
+def _roster(
+    h: Any, meeting: Meeting, utterances: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Peerzy sesji (z metadanymi, założeni w Honcho) + mapa mówca → peer.
+
+    Wszyscy ludzie ze spotkania (obecni i zaproszeni), do tego mówcy, których
+    nie ma na liście uczestników (np. nazwa spoza Recall).
+    """
+    peers: dict[str, Any] = {}
+
+    def ensure_peer(key: str, email: Optional[str], name: str) -> Any:
+        pid = peer_id(key)
+        if pid not in peers:
+            meta = {"name": name, "email": email or None, "source": "earwitness"}
+            peers[pid] = h.peer(pid, metadata=meta)
+        return peers[pid]
+
+    for p in meeting.human_participants:
+        ensure_peer(identity_key(p.name, p.email), p.email, p.display)
+    resolve = _speaker_resolver(meeting)
+    speaker_peer: dict[str, Any] = {}
+    for u in utterances:
+        if u["speaker"] not in speaker_peer:
+            key, email, name = resolve(u["speaker"])
+            speaker_peer[u["speaker"]] = ensure_peer(key, email, name)
+    return peers, speaker_peer
+
+
+def _peer_config() -> Any:
+    from honcho.api_types import SessionPeerConfig
+
+    return SessionPeerConfig(
+        observe_me=True, observe_others=settings.honcho_observe_others
+    )
+
+
+def sync_peers(db: Session, meeting: Meeting) -> dict[str, Any]:
+    """Doprowadź członków sesji Honcho do aktualnej listy uczestników.
+
+    Lista peerów z ingestu to migawka. Później sync dokłada zaproszonych
+    z kalendarza, `resolve_identities` dopina adresy do nazw, ktoś wypada
+    z listy — a członkostwo w sesji decyduje, kto może pytać i o co. Bez
+    tego użytkownik, który dopiero co dostał adres, przechodzi
+    `user_can_ask()`, ale jego peer nie jest w sesji; usunięty uczestnik
+    zachowuje dostęp przez `/ask`. Tanio: jedno `peers()`, `set_peers` tylko
+    przy różnicy. Bez sesji w Honcho (nic nie wgrane) — nic do roboty.
+    """
+    from honcho import NotFoundError
+
+    from webapp.tasks import parse_transcript, transcript_text
+
+    transcript = meeting.latest_transcript
+    if transcript is None or transcript.honcho_synced_at is None:
+        return {"skipped": "not ingested"}
+    h = client()
+    sess = h.session(meeting.id)
+    try:
+        current = {p.id for p in sess.peers()}
+    except NotFoundError:
+        return {"skipped": "no session"}
+    utterances = parse_transcript(transcript_text(transcript))
+    wanted = _roster_ids(meeting, utterances)
+    if wanted == current:
+        return {"changed": False, "peers": len(current)}
+    peers, _ = _roster(h, meeting, utterances)
+    cfg = _peer_config()
+    sess.set_peers([(peer, cfg) for peer in peers.values()])
+    return {
+        "changed": True,
+        "peers": len(peers),
+        "added": sorted(wanted - current),
+        "removed": sorted(current - wanted),
+    }
+
+
 def ingest_transcript(
     db: Session,
     transcript: Transcript,
@@ -212,7 +295,6 @@ def ingest_transcript(
     już nie ma — a backfill by ją pominął. Znacznik sukcesu zapisuje task.
     """
     from honcho import NotFoundError
-    from honcho.api_types import SessionPeerConfig
 
     from webapp.tasks import parse_transcript, transcript_text
 
@@ -230,27 +312,7 @@ def ingest_transcript(
             progress(pct, msg)
         log_line(msg)
 
-    # Peerzy: wszyscy ludzie ze spotkania (obecni i zaproszeni) + mówcy,
-    # których nie ma na liście uczestników (np. nazwa spoza Recall).
-    peers: dict[str, Any] = {}
-    peer_meta: dict[str, dict[str, Any]] = {}
-
-    def ensure_peer(key: str, email: Optional[str], name: str) -> Any:
-        pid = peer_id(key)
-        if pid not in peers:
-            meta = {"name": name, "email": email or None, "source": "earwitness"}
-            peers[pid] = h.peer(pid, metadata=meta)
-            peer_meta[pid] = meta
-        return peers[pid]
-
-    for p in meeting.human_participants:
-        ensure_peer(identity_key(p.name, p.email), p.email, p.display)
-    resolve = _speaker_resolver(meeting)
-    speaker_peer: dict[str, Any] = {}
-    for u in utterances:
-        if u["speaker"] not in speaker_peer:
-            key, email, name = resolve(u["speaker"])
-            speaker_peer[u["speaker"]] = ensure_peer(key, email, name)
+    peers, speaker_peer = _roster(h, meeting, utterances)
     step(20, f"peers: {len(peers)} ({len(speaker_peer)} speaking)")
 
     # Sesja od zera. Najpierw znaczniki — patrz docstring.
@@ -262,9 +324,7 @@ def ingest_transcript(
         log_line("previous Honcho session removed")
     except NotFoundError:
         pass
-    cfg = SessionPeerConfig(
-        observe_me=True, observe_others=settings.honcho_observe_others
-    )
+    cfg = _peer_config()
     sess = h.session(
         meeting.id,
         metadata=_session_metadata(meeting, transcript),
@@ -344,6 +404,26 @@ def queue_ingest(
         args={"transcript_id": transcript_id},
         priority=priority,
         dedupe_key=f"honcho_ingest:{meeting.id}:{transcript_id}",
+        created_by=created_by,
+    )
+
+
+def queue_backfill(db: Session, *, created_by: Optional[str]) -> Optional[Job]:
+    """Zakolejkuj `honcho_backfill` po zmianie tożsamości uczestników.
+
+    Backfill nie tylko wgrywa brakujące transkrypty — dla wgranych robi
+    `sync_peers()`. Wywołują go miejsca, które zmieniają listę uczestników
+    (sync, naprawa tożsamości). Nic, gdy Honcho wyłączone.
+    """
+    if not settings.honcho_enabled:
+        return None
+    from webapp.jobs import enqueue
+
+    return enqueue(
+        db,
+        "honcho_backfill",
+        priority=100,
+        dedupe_key="honcho_backfill:auto",
         created_by=created_by,
     )
 

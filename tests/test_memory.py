@@ -69,9 +69,19 @@ class FakeSession:
         self, hub: "FakeHoncho", id: str, metadata: Any = None, peers: Any = None
     ) -> None:
         self.hub, self.id, self.metadata = hub, id, metadata
-        self.peers = list(peers or [])
+        self._peers = list(peers or [])
         self.messages: list[dict] = []
         self.batches: list[int] = []
+        self.set_peers_calls = 0
+
+    def peers(self) -> list[FakePeer]:
+        if self.id not in self.hub.sessions:
+            raise self.hub.not_found_cls("no such session")
+        return [p for p, _cfg in self._peers]
+
+    def set_peers(self, peers: list) -> None:
+        self.set_peers_calls += 1
+        self._peers = list(peers)
 
     def delete(self) -> None:
         if self.id not in self.hub.sessions:
@@ -246,7 +256,7 @@ def test_ingest_builds_one_session_per_meeting_with_every_attendee(
 
     sess = honcho.sessions[meeting.id]
     assert sess.metadata["title"] == "Roadmap sync"
-    peer_ids = {p.id for p, _cfg in sess.peers}
+    peer_ids = {p.id for p in sess.peers()}
     # Obecność daje dostęp: Ola (tylko zaproszona) też jest w sesji, bot nie.
     assert memory.peer_id("ola@acme.com") in peer_ids
     assert memory.peer_id("fred@fireflies.ai") not in peer_ids
@@ -411,6 +421,80 @@ def test_finished_ingest_hands_off_to_a_transcript_that_appeared_meanwhile(
     assert follow.status == "queued"
 
 
+def test_sync_peers_reconciles_membership_with_the_participant_list(
+    session, meeting, honcho
+):
+    """Lista uczestników żyje po ingeście: dopięty adres ma wpuścić człowieka
+    do sesji, usunięty uczestnik ma z niej wypaść."""
+    memory.ingest_transcript(session, meeting.latest_transcript)
+    session.commit()
+    sess = honcho.sessions[meeting.id]
+    assert memory.sync_peers(session, meeting) == {"changed": False, "peers": 3}
+    assert sess.set_peers_calls == 0, "bez różnicy nie ma zapisu"
+
+    # Gość dostaje adres (resolve_identities), Ola wypada z zaproszenia.
+    guest = next(p for p in meeting.participants if p.name == "Guest Speaker")
+    guest.email = "guest@partner.com"
+    guest.key = "guest@partner.com"
+    ola = next(p for p in meeting.participants if p.name == "Ola Nowak")
+    meeting.participants.remove(ola)
+    session.commit()
+
+    out = memory.sync_peers(session, meeting)
+    assert out["changed"] and sess.set_peers_calls == 1
+    ids = {p.id for p in sess.peers()}
+    assert memory.peer_id("guest@partner.com") in ids
+    assert memory.peer_id("guest speaker") not in ids, "stary peer z nazwy znika"
+    assert memory.peer_id("ola@acme.com") not in ids
+    assert memory.peer_id("jan@acme.com") in ids
+
+    # Bez sesji w Honcho (nic nie wgrane) — nic do roboty, zero wywołań.
+    fresh = Meeting(
+        id="bot-fresh", title="x", transcript_state="ready", status_group="done"
+    )
+    session.add(fresh)
+    session.add(Transcript(meeting_id="bot-fresh", text_path="x"))
+    session.commit()
+    assert memory.sync_peers(session, fresh) == {"skipped": "not ingested"}
+
+
+def test_backfill_reconciles_rosters_of_ingested_meetings(session, meeting, honcho):
+    memory.ingest_transcript(session, meeting.latest_transcript)
+    session.commit()
+    meeting.participants.append(
+        MeetingParticipant(
+            source="calendar", key="new@acme.com", email="new@acme.com", name="New"
+        )
+    )
+    session.commit()
+    job = J.enqueue(session, "honcho_backfill")
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    assert job.result == {"queued": 0, "reconciled": 1, "force": False}
+    assert memory.peer_id("new@acme.com") in {
+        p.id for p in honcho.sessions[meeting.id].peers()
+    }
+
+
+def test_identity_resolution_queues_a_backfill(session, meeting, honcho, monkeypatch):
+    from webapp import recall_sync
+
+    monkeypatch.setattr(
+        recall_sync, "resolve_identities", lambda s: {"matched": 2, "left": 0}
+    )
+    monkeypatch.setattr(
+        recall_sync,
+        "repair_participant_keys",
+        lambda s: {"rekeyed": 0, "merged": 0, "scanned": 3},
+    )
+    J.enqueue(session, "repair_participants")
+    J.run_job(session, J.claim(session, "w1"))
+    backfills = session.query(Job).filter(Job.kind == "honcho_backfill").all()
+    assert [b.dedupe_key for b in backfills] == ["honcho_backfill:auto"]
+
+    monkeypatch.setattr(settings, "honcho_enabled", False)
+    assert memory.queue_backfill(session, created_by="x") is None
+
+
 def test_pipeline_success_queues_memory_ingest_only_when_enabled(
     session, meeting, honcho, monkeypatch
 ):
@@ -463,7 +547,7 @@ def test_backfill_fans_out_one_ingest_per_unsynced_meeting(session, meeting, hon
 
     job = J.enqueue(session, "honcho_backfill")
     J.run_job(session, J.claim(session, "w1"))
-    assert job.result == {"queued": 1, "force": False}
+    assert job.result == {"queued": 1, "reconciled": 0, "force": False}
     ingests = session.query(Job).filter(Job.kind == "honcho_ingest").all()
     assert [j.meeting_id for j in ingests] == [meeting.id]
 
@@ -646,11 +730,17 @@ def test_meeting_ask_panel_is_for_attendees_only(
     session.commit()
     r = client.get(f"/meetings/{meeting.id}", headers=HTML)
     assert f'action="/meetings/{meeting.id}/ask"' in r.text
+    memory.ingest_transcript(session, meeting.latest_transcript)
+    session.commit()
     r = client.post(
         f"/meetings/{meeting.id}/ask", data={"question": "Who owns it?"}, headers=HTML
     )
     assert r.status_code == 200 and "We agreed to ship on Friday." in r.text
     assert honcho.chats[-1]["session"] == meeting.id
+    # Zalogowany dołączył do listy po ingeście — przed pytaniem sesja ma go
+    # już jako członka, inaczej „ask-as-self" nie ma na czym pracować.
+    ids = {p.id for p in honcho.sessions[meeting.id].peers()}
+    assert memory.peer_id("dev@localhost") in ids
 
 
 def test_ask_errors_are_shown_not_raised(client, session, meeting, honcho, monkeypatch):
