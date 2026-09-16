@@ -332,9 +332,14 @@ def ingest_transcript(
     )
     step(30, f"session {meeting.id} created")
 
-    # Wypowiedzi, w paczkach po MESSAGE_BATCH. `created_at` = start spotkania
-    # + offset z transkryptu, żeby Honcho widziało realną oś czasu.
-    base = meeting.started_at
+    # Wypowiedzi, w paczkach po MESSAGE_BATCH. `created_at` = occurred_at
+    # (started_at albo join_at) + offset z transkryptu, żeby Honcho widziało
+    # realną oś czasu. Bez obu znaczników Honcho stempluje czas ingestu.
+    base = meeting.occurred_at
+    if base is None:
+        log_line(
+            "no meeting start or join time — message timestamps fall back to ingest time"
+        )
     batch: list[Any] = []
     sent = 0
     for u in utterances:
@@ -449,7 +454,12 @@ def _latest_ready_transcripts(db: Session) -> list[Transcript]:
     pokazywałoby spotkanie jako „w pamięci", gdy Honcho ma nieaktualne dane.
     """
     meetings = db.execute(
-        select(Meeting).where(Meeting.transcript_state == "ready")
+        select(Meeting)
+        .where(Meeting.transcript_state == "ready")
+        .order_by(
+            func.coalesce(Meeting.started_at, Meeting.join_at).asc().nulls_last(),
+            Meeting.id,
+        )
     ).scalars()
     return [m.latest_transcript for m in meetings if m.latest_transcript is not None]
 
