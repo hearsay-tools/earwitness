@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from webapp.config import settings
@@ -82,8 +83,23 @@ def add_missing_columns() -> int:
                 f"ALTER TABLE {table.name} ADD COLUMN {col.name} "
                 f"{col.type.compile(dialect=engine.dialect)}"
             )
-            with engine.begin() as conn:
-                conn.execute(text(ddl))
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+            except DBAPIError:
+                # Wyścig web ↔ worker: oba procesy startują z `init_db()`, oba
+                # widzą brak kolumny, drugi ALTER dostaje „duplicate column".
+                # Kolumna jest — to nie błąd, tylko ktoś był pierwszy.
+                if col.name not in {
+                    c["name"] for c in inspect(engine).get_columns(table.name)
+                }:
+                    raise
+                log.info(
+                    "schema: column %s.%s added by another process",
+                    table.name,
+                    col.name,
+                )
+                continue
             log.info("schema: added column %s.%s", table.name, col.name)
             added += 1
     return added

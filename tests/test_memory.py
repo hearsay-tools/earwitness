@@ -405,6 +405,43 @@ def test_compose_points_containers_at_honcho_api():
         )
 
 
+def test_add_missing_columns_survives_a_concurrent_alter(session, monkeypatch):
+    """Web i worker startują razem: oba widzą brak kolumny, drugi ALTER
+    dostaje „duplicate column". To nie powód, żeby proces padł."""
+    from webapp import db as db_module
+
+    class StaleInspector:
+        """Widzi bazę sprzed cudzego ALTER-a: bez `honcho_synced_at`."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def has_table(self, name):
+            return self._real.has_table(name)
+
+        def get_columns(self, name, **kw):
+            return [
+                c
+                for c in self._real.get_columns(name, **kw)
+                if c["name"] != "honcho_synced_at"
+            ]
+
+    real_inspect = db_module.inspect
+    calls = {"n": 0}
+
+    def inspect_once_stale(bind):
+        calls["n"] += 1
+        insp = real_inspect(bind)
+        return StaleInspector(insp) if calls["n"] == 1 else insp
+
+    monkeypatch.setattr(db_module, "inspect", inspect_once_stale)
+    assert add_missing_columns() == 0
+    assert calls["n"] == 2, "po błędzie ALTER sprawdzamy stan jeszcze raz"
+    assert "honcho_synced_at" in {
+        c["name"] for c in inspect(engine).get_columns("transcripts")
+    }
+
+
 def test_add_missing_columns_upgrades_an_old_schema(session):
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE transcripts DROP COLUMN honcho_synced_at"))
