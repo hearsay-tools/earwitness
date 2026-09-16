@@ -150,6 +150,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     init_db()
+    # Worker to ten proces, który realnie gada z Honcho (ingest) — ostrzeżenie
+    # przy starcie ma trafić tu, nie tylko do serwera.
+    from webapp.memory import startup_warnings
+
+    for w in startup_warnings():
+        log.warning(w)
     kinds = [k.strip() for k in args.kinds.split(",")] if args.kinds else None
 
     if args.once:

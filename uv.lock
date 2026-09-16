@@ -292,6 +292,7 @@ dependencies = [
     { name = "authlib" },
     { name = "elevenlabs" },
     { name = "fastapi" },
+    { name = "honcho-ai" },
     { name = "httpx" },
     { name = "itsdangerous" },
     { name = "jinja2" },
@@ -314,6 +315,7 @@ requires-dist = [
     { name = "authlib", specifier = ">=1.7.2" },
     { name = "elevenlabs", specifier = ">=2.45.0" },
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "honcho-ai", specifier = ">=2.4.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
@@ -426,6 +428,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "honcho-ai"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/47/f2/445e684deecfcda9a22d9e8803e152f8bc30e26d4b4fbf9d387dc7b29574/honcho_ai-2.4.0.tar.gz", hash = "sha256:474addb5974834ff6ab3303f6bd18ba2074c78e41a7ae160acffd94dd52131d3", size = 61940, upload-time = "2026-08-27T18:52:00.119Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/9b/0cf7480ccd1278f00e8cca2625bbe8ed67755fb0be89652dd604c09bd483/honcho_ai-2.4.0-py3-none-any.whl", hash = "sha256:a84312a7cbfebc7dafc4a3816877af8f0396a793d487407338da4b2b71921ffe", size = 72518, upload-time = "2026-08-27T18:51:59.099Z" },
 ]
 
 [[package]]

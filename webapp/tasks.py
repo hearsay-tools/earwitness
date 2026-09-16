@@ -29,9 +29,10 @@ from transcripts.energy_diarization import format_transcript as format_energy_tr
 from transcripts.recall_client import download_bot_assets
 from transcripts.transcribe import transcribe as elevenlabs_transcribe
 
+from webapp import memory
 from webapp.app_settings import get_autoprocess
 from webapp.config import settings
-from webapp.jobs import JobContext, enqueue, task
+from webapp.jobs import JobContext, RetryLater, enqueue, task
 from webapp.models import Meeting, Transcript, User, utcnow
 from webapp.recall_sync import (
     adopt_disk_recording,
@@ -298,6 +299,23 @@ def _merge_speaking_time(meeting: Meeting, talk_time: dict[str, float]) -> None:
             p.speaking_seconds = round(seconds, 1)
 
 
+def _queue_memory_ingest(
+    ctx: JobContext, meeting: Meeting, transcript_id: Any
+) -> Optional[int]:
+    """Po udanym pipeline'ie dołóż wgranie do pamięci Honcho (jeśli włączona).
+
+    Osobny job, nie krok pipeline'u: transkrypt jest gotowy i widoczny
+    niezależnie od tego, czy Honcho stoi; ingest ma własny retry i log.
+    """
+    if not settings.honcho_enabled:
+        return None
+    job = memory.queue_ingest(
+        ctx.session, meeting, transcript_id, priority=50, created_by="automatic"
+    )
+    ctx.log(f"memory ingest queued (job #{job.id})")
+    return job.id
+
+
 @task("transcribe")
 def transcribe_task(ctx: JobContext) -> dict[str, Any]:
     meeting = _meeting(ctx)
@@ -308,6 +326,9 @@ def transcribe_task(ctx: JobContext) -> dict[str, Any]:
         meeting.transcript_error = f"{type(e).__name__}: {e}"[:2000]
         ctx.session.commit()
         raise
+    result["memory_job"] = _queue_memory_ingest(
+        ctx, meeting, result.get("transcript_id")
+    )
     ctx.progress(100, "done")
     return result
 
@@ -324,8 +345,9 @@ def process_meeting(ctx: JobContext) -> dict[str, Any]:
         meeting.transcript_error = f"{type(e).__name__}: {e}"[:2000]
         ctx.session.commit()
         raise
+    memory_job = _queue_memory_ingest(ctx, meeting, pipe_result.get("transcript_id"))
     ctx.progress(100, "done")
-    return {"fetch": fetch_result, "pipeline": pipe_result}
+    return {"fetch": fetch_result, "pipeline": pipe_result, "memory_job": memory_job}
 
 
 # --------------------------------------------------------------------------
@@ -373,6 +395,8 @@ def sync_recall(ctx: JobContext) -> dict[str, Any]:
         ctx.log(
             f"emails matched: {ident['matched']}, without an email: {ident['left']}"
         )
+        if ident["matched"]:
+            memory.queue_backfill(ctx.session, created_by="sync")
 
     if get_autoprocess(ctx.session):
         queued = _autoqueue(ctx)
@@ -472,6 +496,8 @@ def repair_participants(ctx: JobContext) -> dict[str, Any]:
     ctx.progress(60, "recomputing identity keys")
     result = repair_participant_keys(ctx.session)
     result.update(matched)
+    if matched["matched"] or result.get("rekeyed") or result.get("merged"):
+        memory.queue_backfill(ctx.session, created_by="repair_participants")
     ctx.progress(100, "done", json.dumps(result, ensure_ascii=False))
     return result
 
@@ -526,6 +552,103 @@ def cleanup_audio(ctx: JobContext) -> dict[str, Any]:
         ctx.log(f"audio cleaned up: {meeting.title}")
     ctx.session.commit()
     return {"meetings": removed, "freed_mb": round(freed / 1024 / 1024, 1)}
+
+
+# --------------------------------------------------------------------------
+# Pamięć spotkań (Honcho) — patrz webapp/memory.py
+# --------------------------------------------------------------------------
+
+
+@task("honcho_ingest")
+def honcho_ingest(ctx: JobContext) -> dict[str, Any]:
+    """Wgraj jeden transkrypt do Honcho (sesja = spotkanie, od zera)."""
+    if not settings.honcho_enabled:
+        ctx.progress(100, "skipped", "HONCHO_ENABLED is off — nothing to do")
+        return {"skipped": True}
+    meeting = _meeting(ctx)
+    tid = ctx.args.get("transcript_id")
+    transcript = (
+        ctx.session.get(Transcript, int(tid)) if tid else meeting.latest_transcript
+    )
+    if transcript is None or transcript.meeting_id != meeting.id:
+        raise RuntimeError("no transcript to ingest for this meeting")
+    # Sesja Honcho odzwierciedla jeden transkrypt — najnowszy. Job na starszy
+    # (ponowna transkrypcja zdążyła przed nim) ma własny następca w kolejce.
+    latest = meeting.latest_transcript
+    if latest is not None and latest.id != transcript.id:
+        ctx.progress(
+            100, "skipped", f"transcript #{transcript.id} superseded by #{latest.id}"
+        )
+        return {"skipped": "superseded", "latest": latest.id}
+    # Dwa ingesty jednego spotkania naraz kasowałyby sobie sesję nawzajem —
+    # drugi wraca do kolejki z backoffem (patrz `memory.queue_ingest`).
+    other = memory.running_ingest(ctx.session, meeting.id, exclude=ctx.job.id)
+    if other is not None:
+        raise RetryLater(f"memory ingest #{other} still running for this meeting")
+    ctx.progress(
+        5, "reading transcript", f"transcript #{transcript.id}: {meeting.title}"
+    )
+    result = memory.ingest_transcript(
+        ctx.session,
+        transcript,
+        log_line=ctx.log,
+        progress=ctx.progress,
+    )
+    ctx.session.commit()
+    # Ponowna transkrypcja mogła skończyć się w trakcie tego ingestu. Jej job
+    # stoi w kolejce albo właśnie się odłożył (`RetryLater`) — dokładamy
+    # (deduplikacja odda istniejący), żeby żaden stan wyścigu nie zostawił
+    # Honcho ze starym tekstem.
+    ctx.session.expire(meeting)
+    latest = meeting.latest_transcript
+    if latest is not None and latest.id != transcript.id:
+        follow = memory.queue_ingest(
+            ctx.session, meeting, latest.id, priority=50, created_by="automatic"
+        )
+        ctx.log(f"newer transcript #{latest.id} appeared — queued ingest #{follow.id}")
+        result["follow_up"] = follow.id
+    ctx.progress(100, "done", json.dumps(result, ensure_ascii=False))
+    return result
+
+
+@task("honcho_backfill")
+def honcho_backfill(ctx: JobContext) -> dict[str, Any]:
+    """Zakolejkuj ingest dla gotowych transkryptów, których nie ma w Honcho.
+
+    Fan-out na osobne `honcho_ingest` (jak `_autoqueue`): jedno spotkanie =
+    jeden job z własnym logiem i retry, a padnięte Honcho nie zabiera
+    całego backfillu. `force` wgrywa wszystko od nowa.
+    """
+    if not settings.honcho_enabled:
+        raise RuntimeError("HONCHO_ENABLED is off — enable it before backfilling")
+    force = bool(ctx.args.get("force"))
+    ctx.progress(10, "finding transcripts to ingest")
+    todo = memory.transcripts_to_sync(ctx.session, force=force)
+    for t in todo:
+        memory.queue_ingest(
+            ctx.session,
+            t.meeting,
+            t.id,
+            priority=90,
+            created_by=ctx.job.created_by or "backfill",
+        )
+    # Wgrane spotkania: dopasuj członków sesji do aktualnych uczestników.
+    ctx.progress(50, "reconciling session members", f"queued {len(todo)} ingests")
+    queued_ids = {t.id for t in todo}
+    reconciled = 0
+    for t in memory.transcripts_to_sync(ctx.session, force=True):
+        if t.id in queued_ids:
+            continue
+        outcome = memory.sync_peers(ctx.session, t.meeting)
+        if outcome.get("changed"):
+            reconciled += 1
+            ctx.log(
+                f"{t.meeting.title}: +{len(outcome['added'])} / -{len(outcome['removed'])} peers"
+            )
+    ctx.progress(
+        100, "done", f"queued {len(todo)} memory ingests, {reconciled} rosters updated"
+    )
+    return {"queued": len(todo), "reconciled": reconciled, "force": force}
 
 
 # --------------------------------------------------------------------------

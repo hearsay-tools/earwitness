@@ -8,10 +8,12 @@ przesiąść się na Postgresa bez zmian w kodzie — kolejka zadań używa
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from webapp.config import settings
@@ -43,8 +45,64 @@ SessionLocal = sessionmaker(
 )
 
 
+log = logging.getLogger("webapp.db")
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    add_missing_columns()
+
+
+def add_missing_columns() -> int:
+    """Dołóż kolumny, których brakuje istniejącym tabelom.
+
+    `create_all` tworzy tylko brakujące TABELE — nowa kolumna w modelu na
+    starej bazie kończy się `no such column` przy pierwszym zapytaniu. Pełny
+    Alembic to za dużo na PoC, a każda zmiana schematu do tej pory była
+    addytywna (nowa, nullowalna kolumna). Tyle właśnie robimy tutaj — i nic
+    więcej: NOT NULL bez defaultu, zmiana typu czy usunięcie kolumny
+    wymagają migracji pisanej ręcznie.
+    """
+    insp = inspect(engine)
+    added = 0
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            if not col.nullable and col.default is None and col.server_default is None:
+                log.warning(
+                    "column %s.%s is NOT NULL without a default — add it by hand",
+                    table.name,
+                    col.name,
+                )
+                continue
+            ddl = (
+                f"ALTER TABLE {table.name} ADD COLUMN {col.name} "
+                f"{col.type.compile(dialect=engine.dialect)}"
+            )
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+            except DBAPIError:
+                # Wyścig web ↔ worker: oba procesy startują z `init_db()`, oba
+                # widzą brak kolumny, drugi ALTER dostaje „duplicate column".
+                # Kolumna jest — to nie błąd, tylko ktoś był pierwszy.
+                if col.name not in {
+                    c["name"] for c in inspect(engine).get_columns(table.name)
+                }:
+                    raise
+                log.info(
+                    "schema: column %s.%s added by another process",
+                    table.name,
+                    col.name,
+                )
+                continue
+            log.info("schema: added column %s.%s", table.name, col.name)
+            added += 1
+    return added
 
 
 @contextmanager

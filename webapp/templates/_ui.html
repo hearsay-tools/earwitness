@@ -64,6 +64,41 @@
      title="Mixed MP3 recording">Recording .mp3</a>
 {%- endmacro %}
 
+{# ---------- pytanie do pamięci spotkań (Honcho) ----------
+   Jeden panel dla strony spotkania i dla /ask — różni się tylko `action`
+   i tekstem zachęty. Odpowiedź renderujemy jako tekst z zachowaniem
+   akapitów; to wypowiedź modelu, nie HTML. #}
+{% macro ask_panel(action, ask, placeholder, title='Ask', hint=None) -%}
+  <div class="card card-pad ask">
+    <h2 style="margin:0 0 var(--s2)">{{ title }}</h2>
+    {% if hint %}<p class="small muted" style="margin:0 0 var(--s3)">{{ hint }}</p>{% endif %}
+    <form method="post" action="{{ action }}" class="ask-form" data-busy-form>
+      <label class="visually-hidden" for="ask-question">Question</label>
+      <textarea id="ask-question" name="question" rows="3" required maxlength="2000"
+                placeholder="{{ placeholder }}">{{ ask.question if ask }}</textarea>
+      <div class="row-between" style="margin-top:var(--s2)">
+        <span class="hint">Answers come from meeting memory and take a few seconds.</span>
+        <button class="btn btn-primary" data-busy-label="Thinking…">Ask</button>
+      </div>
+    </form>
+    {% if ask %}
+      {% if ask.error %}
+        <div class="notice notice-err" role="alert" style="margin-top:var(--s4)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 7v6M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <div><strong>No answer.</strong><br>{{ ask.error }}</div>
+        </div>
+      {% elif ask.answer %}
+        <div class="ask-answer" aria-live="polite">{{ ask.answer }}</div>
+      {% else %}
+        <p class="muted" style="margin-top:var(--s4)" aria-live="polite">Nothing in memory answers that yet.</p>
+      {% endif %}
+    {% endif %}
+  </div>
+{%- endmacro %}
+
 {# ---------- paginacja ---------- #}
 {% macro pager(page, pages, base) -%}
   {% if pages > 1 %}
@@ -143,6 +178,21 @@
   <g stroke="var(--lime)" stroke-width="3" stroke-linecap="round">
     <path d="M66 16v9M66 71v9M50 20l5 8M82 20l-5 8"/>
   </g>
+</svg>
+{%- endmacro %}
+
+{# Stos kart z dymkiem pytania — „pamięć spotkań jest pusta”. #}
+{% macro art_memory(w=132, h=96) -%}
+<svg class="art" width="{{ w }}" height="{{ h }}" viewBox="0 0 132 96" fill="none" aria-hidden="true" focusable="false">
+  <rect x="22" y="30" width="64" height="44" rx="6" stroke="var(--line-strong)" stroke-width="2"/>
+  <path d="M30 22h64a6 6 0 0 1 6 6v40" stroke="var(--line-strong)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M38 14h64a6 6 0 0 1 6 6v40" stroke="var(--line-strong)" stroke-width="2" stroke-linecap="round"/>
+  <g stroke="var(--ink-3)" stroke-width="3" stroke-linecap="round">
+    <path d="M32 44h18M56 44h20M32 56h28M32 66h14"/>
+  </g>
+  <circle cx="102" cy="74" r="14" fill="var(--bg)" stroke="var(--lime)" stroke-width="2"/>
+  <path d="M97.5 70.5a4.5 4.5 0 1 1 6.5 4c-1.5.9-2 1.7-2 3.5" stroke="var(--lime)" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M102 82.5v.5" stroke="var(--lime)" stroke-width="2.6" stroke-linecap="round"/>
 </svg>
 {%- endmacro %}
 

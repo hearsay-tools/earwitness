@@ -475,6 +475,11 @@ class Transcript(Base):
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
     stats: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
 
+    # Kiedy ten transkrypt trafił do pamięci Honcho (webapp/memory.py).
+    # Sesja Honcho jest jedna na spotkanie, więc znacznik ma najwyżej jeden
+    # transkrypt spotkania — ten, który sesja aktualnie odzwierciedla.
+    honcho_synced_at: Mapped[Optional[dt.datetime]] = mapped_column(UtcDateTime)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         UtcDateTime, default=utcnow, index=True
     )

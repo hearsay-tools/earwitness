@@ -981,3 +981,18 @@ pre.log {
   .card { box-shadow: none; border: 0; }
   body { background: #fff; }
 }
+
+/* ---------- pytania do pamięci spotkań (Honcho) ----------
+   Odpowiedź modelu to tekst z akapitami, nie HTML — `pre-wrap` zachowuje
+   podziały, a limonkowa krawędź odróżnia ją od treści transkryptu. */
+.ask-form textarea { resize: vertical; }
+.ask-answer {
+  margin-top: var(--s4);
+  padding: var(--s3) var(--s4);
+  border-left: 3px solid var(--lime);
+  background: var(--bg-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
