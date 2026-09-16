@@ -306,9 +306,20 @@ def _queue_memory_ingest(
 
     Osobny job, nie krok pipeline'u: transkrypt jest gotowy i widoczny
     niezależnie od tego, czy Honcho stoi; ingest ma własny retry i log.
+
+    Auto-ingest ma priorytet 50 i wyprzedziłby historyczny backfill (90).
+    Gdy starsze gotowe transkrypty jeszcze nie są w Honcho, kolejkujemy
+    backfill (najstarsze pierwsze) zamiast wrzucać to spotkanie na czoło.
     """
     if not settings.honcho_enabled:
         return None
+    pending = memory.transcripts_to_sync(ctx.session)
+    if pending and pending[0].meeting_id != meeting.id:
+        job = memory.queue_backfill(ctx.session, created_by="automatic")
+        if job is None:
+            return None
+        ctx.log(f"older unsynced meetings — queued backfill (job #{job.id})")
+        return job.id
     job = memory.queue_ingest(
         ctx.session, meeting, transcript_id, priority=50, created_by="automatic"
     )

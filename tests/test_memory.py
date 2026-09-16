@@ -277,6 +277,28 @@ def test_ingest_builds_one_session_per_meeting_with_every_attendee(
     assert t.honcho_synced_at is not None
 
 
+def test_ingest_uses_join_at_when_started_at_is_missing(session, meeting, honcho):
+    meeting.started_at = None
+    meeting.join_at = dt.datetime(2026, 4, 1, 9, 0, tzinfo=dt.timezone.utc)
+    session.commit()
+    memory.ingest_transcript(session, meeting.latest_transcript)
+    first = honcho.sessions[meeting.id].messages[0]
+    assert first["created_at"] == meeting.join_at + dt.timedelta(seconds=1)
+
+
+def test_ingest_without_meeting_time_logs_ingest_time_fallback(
+    session, meeting, honcho
+):
+    meeting.started_at = None
+    meeting.join_at = None
+    session.commit()
+    job = J.enqueue(session, "honcho_ingest", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_ingest"]))
+    assert job.status == "done"
+    assert honcho.sessions[meeting.id].messages[0]["created_at"] is None
+    assert "ingest time" in (job.log or "")
+
+
 def test_reingest_recreates_the_session(session, meeting, honcho):
     """Ponowna transkrypcja nie może dołożyć drugiego kompletu wypowiedzi."""
     memory.ingest_transcript(session, meeting.latest_transcript)
@@ -513,6 +535,91 @@ def test_pipeline_success_queues_memory_ingest_only_when_enabled(
     assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 1
 
 
+def _ready_meeting(
+    session, tmp_path, bot_id: str, when: dt.datetime, *, synced: bool = False
+) -> Meeting:
+    m = Meeting(
+        id=bot_id,
+        title=bot_id,
+        started_at=when,
+        transcript_state="ready",
+        status_group="done",
+    )
+    path = tmp_path / f"{bot_id}.txt"
+    path.write_text("Jan [00:00:01] hi\n", encoding="utf-8")
+    t = Transcript(
+        meeting_id=bot_id,
+        text_path=str(path),
+        utterance_count=1,
+        speakers=[],
+        honcho_synced_at=dt.datetime.now(dt.timezone.utc) if synced else None,
+    )
+    session.add(m)
+    session.add(t)
+    session.commit()
+    return m
+
+
+def test_pipeline_success_queues_backfill_when_older_meetings_are_unsynced(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-march",
+        dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    assert session.query(Job).filter(Job.kind == "honcho_ingest").count() == 0
+    backfills = session.query(Job).filter(Job.kind == "honcho_backfill").all()
+    assert [b.dedupe_key for b in backfills] == ["honcho_backfill:auto"]
+    assert job.result["memory_job"] == backfills[0].id
+
+
+def test_pipeline_success_still_ingests_when_older_meetings_are_synced(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-march",
+        dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc),
+        synced=True,
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    queued = session.query(Job).filter(Job.kind == "honcho_ingest").all()
+    assert [q.meeting_id for q in queued] == [meeting.id]
+    assert session.query(Job).filter(Job.kind == "honcho_backfill").count() == 0
+    assert job.result["memory_job"] == queued[0].id
+
+
+def test_pipeline_success_ingests_oldest_unsynced_even_if_newer_wait(
+    session, meeting, tmp_path, honcho, monkeypatch
+):
+    _ready_meeting(
+        session,
+        tmp_path,
+        "bot-october",
+        dt.datetime(2026, 10, 1, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    monkeypatch.setattr(
+        tasks, "_do_pipeline", lambda ctx, m, force_asr=False: {"transcript_id": 7}
+    )
+    J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1"))
+    queued = session.query(Job).filter(Job.kind == "honcho_ingest").all()
+    assert [q.meeting_id for q in queued] == [meeting.id]
+    assert session.query(Job).filter(Job.kind == "honcho_backfill").count() == 0
+
+
 def test_honcho_ingest_task_is_a_noop_when_disabled(
     session, meeting, honcho, monkeypatch
 ):
@@ -558,6 +665,42 @@ def test_backfill_fans_out_one_ingest_per_unsynced_meeting(session, meeting, hon
     )
     J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
     assert forced.result["queued"] == 2
+
+
+def test_backfill_enqueues_ingests_in_meeting_chronology(session, tmp_path, honcho):
+    def add(bot_id: str, when: dt.datetime) -> None:
+        session.add(
+            Meeting(
+                id=bot_id,
+                title=bot_id,
+                started_at=when,
+                transcript_state="ready",
+                status_group="done",
+            )
+        )
+        path = tmp_path / f"{bot_id}.txt"
+        path.write_text("Jan [00:00:01] hi\n", encoding="utf-8")
+        session.add(
+            Transcript(
+                meeting_id=bot_id,
+                text_path=str(path),
+                utterance_count=1,
+                speakers=[],
+            )
+        )
+
+    add("bot-june", dt.datetime(2026, 6, 1, 10, 0, tzinfo=dt.timezone.utc))
+    add("bot-march", dt.datetime(2026, 3, 1, 10, 0, tzinfo=dt.timezone.utc))
+    add("bot-may", dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.timezone.utc))
+    session.commit()
+
+    job = J.enqueue(session, "honcho_backfill")
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_backfill"]))
+    assert job.result["queued"] == 3
+    ingests = (
+        session.query(Job).filter(Job.kind == "honcho_ingest").order_by(Job.id).all()
+    )
+    assert [j.meeting_id for j in ingests] == ["bot-march", "bot-may", "bot-june"]
 
 
 def test_status_counts_only_the_latest_transcript_per_meeting(session, meeting, honcho):
