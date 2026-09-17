@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable, Optional
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
+from webapp import labels
 from webapp.config import settings
 from webapp.models import (
     ACTIVE_JOB_STATES,
@@ -38,6 +39,13 @@ from webapp.models import (
 log = logging.getLogger("webapp.jobs")
 
 MAX_LOG_CHARS = 40_000
+
+# One priority point per this many seconds past `scheduled_at`. A priority-90
+# retry then outranks a priority-20 job after ~17.5 minutes overdue — high
+# priority work can delay it, not starve it forever.
+PRIORITY_AGING_SECONDS = 15.0
+# UI/API: don't flag a retry as overdue during its own backoff window.
+OVERDUE_AFTER_SECONDS = 60.0
 
 # Zakolejkowanie od razu przestawia stan spotkania na „queued", żeby UI nie
 # czekał na workera. To rezerwacja — i ktoś musi ją zdjąć, gdy zadanie umrze.
@@ -236,6 +244,35 @@ def enqueue(
     return job
 
 
+def effective_priority(job: Job, now: dt.datetime) -> float:
+    """Stored priority, aged down the longer the job has been due.
+
+    Fresh jobs (`scheduled_at` ≈ now) keep their configured order. A retry
+    sitting past due slowly outranks later, higher-priority arrivals.
+    """
+    overdue = max(0.0, (now - job.scheduled_at).total_seconds())
+    return job.priority - overdue / PRIORITY_AGING_SECONDS
+
+
+def overdue_seconds(job: Job, now: Optional[dt.datetime] = None) -> Optional[float]:
+    """Seconds past due for a queued job, or None if it is not significantly late."""
+    if job.status != JOB_QUEUED:
+        return None
+    now = now or utcnow()
+    delay = (now - job.scheduled_at).total_seconds()
+    if delay < OVERDUE_AFTER_SECONDS:
+        return None
+    return delay
+
+
+def queue_step(job: Job, now: Optional[dt.datetime] = None) -> Optional[str]:
+    """Step shown in /jobs and the poll API — replaces a stale retry countdown."""
+    late = overdue_seconds(job, now)
+    if late is None:
+        return job.step
+    return labels.job_overdue_step(late)
+
+
 def _batch_ready() -> Any:
     """SQL condition: no earlier item in this job's batch is still active."""
     earlier = aliased(Job)
@@ -279,30 +316,30 @@ def claim(
 
     Compare-and-swap zamiast `FOR UPDATE SKIP LOCKED`, bo ma działać też na
     SQLite. Przy kilku workerach przegrany odświeża listę kandydatów.
+
+    Kolejność: priorytet starzeje się wraz z czasem po `scheduled_at`, żeby
+    retry nie głodowało za świeższymi zadaniami o niższym numerze. Świeże
+    zadania nadal idą po `priority`, potem `scheduled_at`, potem `id`.
     """
     now = utcnow()
     for _ in range(10):
-        q = (
-            select(Job.id)
-            .where(
-                Job.status == JOB_QUEUED,
-                Job.scheduled_at <= now,
-                _batch_ready(),
-            )
-            .order_by(Job.priority.asc(), Job.scheduled_at.asc(), Job.id.asc())
-            .limit(5)
+        q = select(Job).where(
+            Job.status == JOB_QUEUED,
+            Job.scheduled_at <= now,
+            _batch_ready(),
         )
         if kinds:
             q = q.where(Job.kind.in_(list(kinds)))
-        candidates = list(session.execute(q).scalars())
-        if not candidates:
+        due = list(session.execute(q).scalars())
+        if not due:
             return None
-        for job_id in candidates:
-            if _claim_candidate(session, job_id, worker_id, now):
-                return session.get(Job, job_id)
-            # Another worker changed queue state after our SELECT. Do not use
-            # the rest of this stale list: its batch eligibility may differ.
-            break
+        due.sort(
+            key=lambda job: (effective_priority(job, now), job.scheduled_at, job.id)
+        )
+        if _claim_candidate(session, due[0].id, worker_id, now):
+            return session.get(Job, due[0].id)
+        # Another worker changed queue state after our SELECT. Do not use
+        # the rest of this stale list: its batch eligibility may differ.
     return None
 
 

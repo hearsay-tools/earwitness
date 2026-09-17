@@ -41,6 +41,20 @@ JOB_STATUSES: dict[str, str] = {
     "canceled": "Canceled",
 }
 
+JOB_OVERDUE = "Overdue"
+
+
+def job_overdue_step(seconds: float) -> str:
+    wait = int(seconds)
+    if wait < 60:
+        shown = f"{wait}s"
+    elif wait < 3600:
+        shown = f"{wait // 60}m"
+    else:
+        shown = f"{wait // 3600}h {wait % 3600 // 60:02d}m"
+    return f"{JOB_OVERDUE} · waiting {shown} past due"
+
+
 # --- stan spotkania ------------------------------------------------------
 
 ASSET_STATES: dict[str, str] = {
