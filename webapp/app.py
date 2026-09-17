@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import logging
 import math
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -625,17 +626,51 @@ def meetings_bulk(
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ):
-    n = 0
-    for mid in meeting_ids:
-        meeting = session.get(Meeting, mid)
-        if meeting is None:
-            continue
-        enqueue(session, kind, meeting_id=mid, priority=30, created_by=user.email)
+    if kind not in ("process", "fetch_assets", "transcribe"):
+        raise HTTPException(400, "Unknown job type")
+    meetings = list(
+        session.execute(
+            select(Meeting)
+            .where(Meeting.id.in_(meeting_ids))
+            .order_by(
+                func.coalesce(Meeting.started_at, Meeting.join_at).asc().nulls_last(),
+                Meeting.id.asc(),
+            )
+        ).scalars()
+    )
+    active_meeting_ids = set(
+        session.execute(
+            select(Job.meeting_id).where(
+                Job.meeting_id.in_([meeting.id for meeting in meetings]),
+                Job.kind == kind,
+                Job.status.in_(ACTIVE_JOB_STATES),
+            )
+        ).scalars()
+    )
+    if active_meeting_ids:
+        raise HTTPException(
+            409,
+            "One or more selected meetings already have this job queued or running",
+        )
+    batch_id = uuid.uuid4().hex
+    size = len(meetings)
+    for position, meeting in enumerate(meetings, start=1):
+        enqueue(
+            session,
+            kind,
+            meeting_id=meeting.id,
+            priority=30,
+            created_by=user.email,
+            batch_id=batch_id,
+            batch_position=position,
+            batch_size=size,
+        )
         if kind in ("process", "transcribe"):
             meeting.transcript_state = "queued"
-        n += 1
+        if kind in ("process", "fetch_assets") and meeting.asset_state != "ready":
+            meeting.asset_state = "queued"
     session.commit()
-    return RedirectResponse(f"/jobs?queued={n}", status_code=303)
+    return RedirectResponse(f"/jobs?queued={size}", status_code=303)
 
 
 # --------------------------------------------------------------------------
@@ -1079,6 +1114,9 @@ def api_jobs(
                 "progress": j.progress,
                 "step": j.step,
                 "meeting_id": j.meeting_id,
+                "batch_id": j.batch_id,
+                "batch_position": j.batch_position,
+                "batch_size": j.batch_size,
                 "attempts": j.attempts,
                 "error": (j.error or "")[:500] or None,
                 "started_at": j.started_at.isoformat() if j.started_at else None,

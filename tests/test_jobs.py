@@ -7,7 +7,15 @@ import datetime as dt
 import pytest
 from webapp import jobs as J
 from webapp import tasks  # noqa: F401 — rejestruje typy zadań
-from webapp.models import JOB_FAILED, JOB_QUEUED, JOB_RUNNING, Job, Meeting, utcnow
+from webapp.models import (
+    JOB_CANCELED,
+    JOB_FAILED,
+    JOB_QUEUED,
+    JOB_RUNNING,
+    Job,
+    Meeting,
+    utcnow,
+)
 
 
 def test_enqueue_dedupes_active_jobs(session):
@@ -97,6 +105,72 @@ def test_claim_filters_by_kind(session):
     J.enqueue(session, "sync_recall", dedupe_key="s")
     assert J.claim(session, "w1", kinds=["process"]) is None
     assert J.claim(session, "w1", kinds=["sync_recall"]) is not None
+
+
+def test_claim_runs_batch_strictly_in_position_order(session):
+    third = J.enqueue(
+        session,
+        "process",
+        meeting_id="m3",
+        batch_id="batch",
+        batch_position=3,
+        batch_size=3,
+    )
+    first = J.enqueue(
+        session,
+        "process",
+        meeting_id="m1",
+        batch_id="batch",
+        batch_position=1,
+        batch_size=3,
+    )
+    second = J.enqueue(
+        session,
+        "process",
+        meeting_id="m2",
+        batch_id="batch",
+        batch_position=2,
+        batch_size=3,
+    )
+
+    assert J.claim(session, "w1").id == first.id
+    assert J.claim(session, "w2") is None
+    J.finish(session, first)
+    assert J.claim(session, "w2").id == second.id
+    J.finish(session, second)
+    assert J.claim(session, "w3").id == third.id
+
+
+def test_terminal_batch_failure_cancels_every_later_item(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    second = J.enqueue(
+        session, "process", meeting_id="m2", batch_id="batch", batch_position=2
+    )
+    third = J.enqueue(
+        session, "process", meeting_id="m3", batch_id="batch", batch_position=3
+    )
+
+    assert J.claim(session, "w1").id == first.id
+    J.fail(session, first, "terminal", allow_retry=False)
+
+    assert first.status == JOB_FAILED
+    assert second.status == JOB_CANCELED
+    assert third.status == JOB_CANCELED
+    assert "batch stopped" in second.step
+    assert J.claim(session, "w2") is None
+
+
+def test_batch_does_not_block_unrelated_jobs(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    J.enqueue(session, "process", meeting_id="m2", batch_id="batch", batch_position=2)
+    unrelated = J.enqueue(session, "sync_recall", dedupe_key="sync")
+
+    assert J.claim(session, "w1").id == first.id
+    assert J.claim(session, "w2").id == unrelated.id
 
 
 def test_fail_retries_then_gives_up(session):

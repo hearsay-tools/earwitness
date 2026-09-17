@@ -11,6 +11,7 @@ import datetime as dt
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from webapp import labels, tasks
 from webapp.app import app
 from webapp.config import settings
@@ -320,6 +321,67 @@ def test_api_jobs_expose_human_labels(client, session, meeting):
     item = data["items"][0]
     assert item["status_label"] == "In progress"
     assert item["kind_label"] == "Download + transcription"
+
+
+def test_bulk_processing_queues_one_chronological_batch(client, session, meeting):
+    older = Meeting(
+        id="bot-older",
+        title="Older meeting",
+        started_at=dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc),
+        status_code="done",
+        status_group="done",
+        recording_id="rec-older",
+    )
+    session.add(older)
+    session.commit()
+
+    response = client.post(
+        "/meetings/bulk",
+        data={"meeting_ids": [meeting.id, older.id], "kind": "process"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    jobs = list(session.scalars(select(Job).order_by(Job.batch_position)))
+    assert [job.meeting_id for job in jobs] == [older.id, meeting.id]
+    assert jobs[0].batch_id == jobs[1].batch_id
+    assert [(job.batch_position, job.batch_size) for job in jobs] == [(1, 2), (2, 2)]
+
+    page = client.get("/jobs", headers=HTML)
+    assert f"Batch {jobs[0].batch_id[:8]} · 1/2" in page.text
+    assert f"Batch {jobs[0].batch_id[:8]} · 2/2" in page.text
+
+
+def test_bulk_processing_rejects_unknown_job_type(client, meeting):
+    response = client.post(
+        "/meetings/bulk",
+        data={"meeting_ids": [meeting.id], "kind": "unknown"},
+    )
+    assert response.status_code == 400
+
+
+def test_bulk_processing_is_atomic_when_a_selected_job_is_already_active(
+    client, session, meeting
+):
+    other = Meeting(
+        id="bot-other",
+        title="Other meeting",
+        started_at=dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc),
+        status_code="done",
+        status_group="done",
+        recording_id="rec-other",
+    )
+    session.add(other)
+    session.add(Job(kind="process", meeting_id=meeting.id, status="running"))
+    session.commit()
+
+    response = client.post(
+        "/meetings/bulk",
+        data={"meeting_ids": [meeting.id, other.id], "kind": "process"},
+    )
+
+    assert response.status_code == 409
+    assert session.scalar(select(Job).where(Job.meeting_id == other.id)) is None
 
 
 # --------------------------------------------------------------------------

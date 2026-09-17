@@ -19,8 +19,8 @@ import logging
 import traceback
 from typing import Any, Callable, Iterable, Optional
 
-from sqlalchemy import or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, or_, select, update
+from sqlalchemy.orm import Session, aliased
 
 from webapp.config import settings
 from webapp.models import (
@@ -155,6 +155,9 @@ def enqueue(
     max_attempts: int = 3,
     created_by: Optional[str] = None,
     delay_seconds: float = 0.0,
+    batch_id: Optional[str] = None,
+    batch_position: Optional[int] = None,
+    batch_size: Optional[int] = None,
 ) -> Job:
     """Dodaj zadanie. Idempotentne po `dedupe_key` wśród aktywnych zadań.
 
@@ -206,6 +209,9 @@ def enqueue(
         max_attempts=max_attempts,
         created_by=created_by,
         scheduled_at=utcnow() + dt.timedelta(seconds=delay_seconds),
+        batch_id=batch_id,
+        batch_position=batch_position,
+        batch_size=batch_size,
     )
     session.add(job)
     session.commit()
@@ -221,10 +227,24 @@ def claim(
     SQLite. Przy kilku workerach przegrany po prostu próbuje następnego.
     """
     now = utcnow()
+    earlier = aliased(Job)
     for _ in range(10):
         q = (
             select(Job.id)
-            .where(Job.status == JOB_QUEUED, Job.scheduled_at <= now)
+            .where(
+                Job.status == JOB_QUEUED,
+                Job.scheduled_at <= now,
+                or_(
+                    Job.batch_id.is_(None),
+                    ~exists(
+                        select(earlier.id).where(
+                            earlier.batch_id == Job.batch_id,
+                            earlier.batch_position < Job.batch_position,
+                            earlier.status.in_(ACTIVE_JOB_STATES),
+                        )
+                    ),
+                ),
+            )
             .order_by(Job.priority.asc(), Job.scheduled_at.asc(), Job.id.asc())
             .limit(5)
         )
@@ -304,7 +324,34 @@ def fail(session: Session, job: Job, error: str, allow_retry: bool = True) -> No
         job.finished_at = utcnow()
         # Dopiero teraz — przy retry spotkanie nadal czeka i „queued" jest prawdą.
         release_meeting_state(session, job, failed=True)
+        _stop_batch_after_failure(session, job)
     session.commit()
+
+
+def _stop_batch_after_failure(session: Session, failed_job: Job) -> None:
+    """Anuluj wszystko za terminalnie nieudanym elementem paczki.
+
+    Retry nie zatrzymuje paczki: wcześniejszy element pozostaje aktywny, więc
+    `claim()` nadal blokuje następców. Dopiero wyczerpanie prób zamyka kolejkę,
+    żeby późniejsze spotkania nie wystartowały po błędzie.
+    """
+    if failed_job.batch_id is None or failed_job.batch_position is None:
+        return
+    remaining = list(
+        session.execute(
+            select(Job).where(
+                Job.batch_id == failed_job.batch_id,
+                Job.batch_position > failed_job.batch_position,
+                Job.status == JOB_QUEUED,
+            )
+        ).scalars()
+    )
+    now = utcnow()
+    for job in remaining:
+        job.status = JOB_CANCELED
+        job.finished_at = now
+        job.step = f"batch stopped after job #{failed_job.id} failed"
+        release_meeting_state(session, job, failed=False)
 
 
 def cancel(session: Session, job: Job) -> bool:
