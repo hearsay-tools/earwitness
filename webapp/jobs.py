@@ -19,8 +19,10 @@ import logging
 import traceback
 from typing import Any, Callable, Iterable, Optional
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import Float, exists, or_, select, update
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.expression import FunctionElement
 
 from webapp import labels
 from webapp.config import settings
@@ -46,6 +48,28 @@ MAX_LOG_CHARS = 40_000
 PRIORITY_AGING_SECONDS = 15.0
 # UI/API: don't flag a retry as overdue during its own backoff window.
 OVERDUE_AFTER_SECONDS = 60.0
+CLAIM_CANDIDATE_LIMIT = 5
+
+
+class _UnixEpoch(FunctionElement):
+    """Unix timestamp of a datetime column. SQLite and Postgres disagree."""
+
+    inherit_cache = True
+    type = Float()
+    name = "ew_unixepoch"
+
+
+@compiles(_UnixEpoch, "sqlite")
+def _unixepoch_sqlite(element, compiler, **kw):  # noqa: ANN001
+    (col,) = element.clauses
+    return "CAST(strftime('%%s', %s) AS FLOAT)" % compiler.process(col, **kw)
+
+
+@compiles(_UnixEpoch, "postgresql")
+def _unixepoch_pg(element, compiler, **kw):  # noqa: ANN001
+    (col,) = element.clauses
+    return "EXTRACT(EPOCH FROM %s)" % compiler.process(col, **kw)
+
 
 # Zakolejkowanie od razu przestawia stan spotkania na „queued", żeby UI nie
 # czekał na workera. To rezerwacja — i ktoś musi ją zdjąć, gdy zadanie umrze.
@@ -244,16 +268,6 @@ def enqueue(
     return job
 
 
-def effective_priority(job: Job, now: dt.datetime) -> float:
-    """Stored priority, aged down the longer the job has been due.
-
-    Fresh jobs (`scheduled_at` ≈ now) keep their configured order. A retry
-    sitting past due slowly outranks later, higher-priority arrivals.
-    """
-    overdue = max(0.0, (now - job.scheduled_at).total_seconds())
-    return job.priority - overdue / PRIORITY_AGING_SECONDS
-
-
 def overdue_seconds(job: Job, now: Optional[dt.datetime] = None) -> Optional[float]:
     """Seconds past due for a queued job, or None if it is not significantly late."""
     if job.status != JOB_QUEUED:
@@ -322,24 +336,32 @@ def claim(
     zadania nadal idą po `priority`, potem `scheduled_at`, potem `id`.
     """
     now = utcnow()
+    aged = (
+        Job.priority
+        - (now.timestamp() - _UnixEpoch(Job.scheduled_at)) / PRIORITY_AGING_SECONDS
+    )
     for _ in range(10):
-        q = select(Job).where(
-            Job.status == JOB_QUEUED,
-            Job.scheduled_at <= now,
-            _batch_ready(),
+        q = (
+            select(Job.id)
+            .where(
+                Job.status == JOB_QUEUED,
+                Job.scheduled_at <= now,
+                _batch_ready(),
+            )
+            .order_by(aged.asc(), Job.scheduled_at.asc(), Job.id.asc())
+            .limit(CLAIM_CANDIDATE_LIMIT)
         )
         if kinds:
             q = q.where(Job.kind.in_(list(kinds)))
-        due = list(session.execute(q).scalars())
-        if not due:
+        candidates = list(session.execute(q).scalars())
+        if not candidates:
             return None
-        due.sort(
-            key=lambda job: (effective_priority(job, now), job.scheduled_at, job.id)
-        )
-        if _claim_candidate(session, due[0].id, worker_id, now):
-            return session.get(Job, due[0].id)
-        # Another worker changed queue state after our SELECT. Do not use
-        # the rest of this stale list: its batch eligibility may differ.
+        for job_id in candidates:
+            if _claim_candidate(session, job_id, worker_id, now):
+                return session.get(Job, job_id)
+            # Another worker changed queue state after our SELECT. Do not use
+            # the rest of this stale list: its batch eligibility may differ.
+            break
     return None
 
 
