@@ -522,6 +522,12 @@ class Job(Base):
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(300), index=True)
     args: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
 
+    # Bulk actions form a chain.  A worker may claim an item only after every
+    # earlier item in the same batch has reached a terminal state.
+    batch_id: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    batch_position: Mapped[Optional[int]] = mapped_column(Integer)
+    batch_size: Mapped[Optional[int]] = mapped_column(Integer)
+
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
 

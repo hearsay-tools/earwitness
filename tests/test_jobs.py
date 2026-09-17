@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from webapp import jobs as J
 from webapp import tasks  # noqa: F401 — rejestruje typy zadań
-from webapp.models import JOB_FAILED, JOB_QUEUED, JOB_RUNNING, Job, Meeting, utcnow
+from webapp.db import SessionLocal
+from webapp.models import (
+    JOB_CANCELED,
+    JOB_FAILED,
+    JOB_QUEUED,
+    JOB_RUNNING,
+    Job,
+    Meeting,
+    utcnow,
+)
 
 
 def test_enqueue_dedupes_active_jobs(session):
@@ -70,6 +81,37 @@ def test_enqueue_allows_requeue_after_finish(session):
     assert b.id != a.id
 
 
+def test_enqueue_can_defer_commit_for_atomic_batch_creation(session):
+    job = J.enqueue(session, "process", meeting_id="m1", commit=False)
+    assert job.id is not None
+
+    with SessionLocal() as other:
+        assert other.get(Job, job.id) is None
+
+    session.commit()
+    with SessionLocal() as other:
+        assert other.get(Job, job.id) is not None
+
+
+def test_enqueue_serializes_concurrent_work_for_the_same_meeting(session):
+    session.add(Meeting(id="locked-meeting"))
+    session.commit()
+    first = J.enqueue(session, "process", meeting_id="locked-meeting", commit=False)
+
+    def enqueue_again() -> int:
+        with SessionLocal() as other:
+            return J.enqueue(other, "process", meeting_id="locked-meeting").id
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        second = pool.submit(enqueue_again)
+        time.sleep(0.1)
+        assert not second.done(), (
+            "the meeting reservation must block a concurrent enqueue"
+        )
+        session.commit()
+        assert second.result(timeout=2) == first.id
+
+
 def test_enqueue_rejects_unknown_kind(session):
     with pytest.raises(ValueError):
         J.enqueue(session, "nie-ma-takiego")
@@ -97,6 +139,86 @@ def test_claim_filters_by_kind(session):
     J.enqueue(session, "sync_recall", dedupe_key="s")
     assert J.claim(session, "w1", kinds=["process"]) is None
     assert J.claim(session, "w1", kinds=["sync_recall"]) is not None
+
+
+def test_claim_runs_batch_strictly_in_position_order(session):
+    third = J.enqueue(
+        session,
+        "process",
+        meeting_id="m3",
+        batch_id="batch",
+        batch_position=3,
+        batch_size=3,
+    )
+    first = J.enqueue(
+        session,
+        "process",
+        meeting_id="m1",
+        batch_id="batch",
+        batch_position=1,
+        batch_size=3,
+    )
+    second = J.enqueue(
+        session,
+        "process",
+        meeting_id="m2",
+        batch_id="batch",
+        batch_position=2,
+        batch_size=3,
+    )
+
+    assert J.claim(session, "w1").id == first.id
+    assert J.claim(session, "w2") is None
+    J.finish(session, first)
+    assert J.claim(session, "w2").id == second.id
+    J.finish(session, second)
+    assert J.claim(session, "w3").id == third.id
+
+
+def test_terminal_batch_failure_cancels_every_later_item(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    second = J.enqueue(
+        session, "process", meeting_id="m2", batch_id="batch", batch_position=2
+    )
+    third = J.enqueue(
+        session, "process", meeting_id="m3", batch_id="batch", batch_position=3
+    )
+
+    assert J.claim(session, "w1").id == first.id
+    J.fail(session, first, "terminal", allow_retry=False)
+
+    assert first.status == JOB_FAILED
+    assert second.status == JOB_CANCELED
+    assert third.status == JOB_CANCELED
+    assert "batch stopped" in second.step
+    assert J.claim(session, "w2") is None
+
+
+def test_batch_does_not_block_unrelated_jobs(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    J.enqueue(session, "process", meeting_id="m2", batch_id="batch", batch_position=2)
+    unrelated = J.enqueue(session, "sync_recall", dedupe_key="sync")
+
+    assert J.claim(session, "w1").id == first.id
+    assert J.claim(session, "w2").id == unrelated.id
+
+
+def test_claim_cas_rechecks_batch_predecessors(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    second = J.enqueue(
+        session, "process", meeting_id="m2", batch_id="batch", batch_position=2
+    )
+    first.status = JOB_RUNNING
+    session.commit()
+
+    assert J._claim_candidate(session, second.id, "stale-worker", utcnow()) is False
+    assert second.status == JOB_QUEUED
 
 
 def test_fail_retries_then_gives_up(session):
