@@ -99,6 +99,22 @@
   </div>
 {%- endmacro %}
 
+{% macro memory_backfill_form(primary=False) -%}
+  <form method="post" action="/memory/backfill" class="row" data-busy-form>
+    <label class="visually-hidden" for="backfill-limit">Batch size</label>
+    <select name="limit" id="backfill-limit" class="inline-select">
+      {% for n in BACKFILL_BATCH_SIZES %}
+      <option value="{{ n }}">{{ n }}</option>
+      {% endfor %}
+      <option value="">{{ BACKFILL_BATCH_ALL }}</option>
+    </select>
+    <button class="btn {{ 'btn-primary' if primary else 'btn-line btn-sm' }}" data-busy-label="Queueing…"
+            title="Queues one ingest job per meeting, oldest first. Start with a slice — Honcho runs an LLM over each utterance.">
+      Ingest
+    </button>
+  </form>
+{%- endmacro %}
+
 {# ---------- paginacja ---------- #}
 {% macro pager(page, pages, base) -%}
   {% if pages > 1 %}
