@@ -236,32 +236,58 @@ def enqueue(
     return job
 
 
+def _batch_ready() -> Any:
+    """SQL condition: no earlier item in this job's batch is still active."""
+    earlier = aliased(Job)
+    return or_(
+        Job.batch_id.is_(None),
+        ~exists(
+            select(earlier.id).where(
+                earlier.batch_id == Job.batch_id,
+                earlier.batch_position < Job.batch_position,
+                earlier.status.in_(ACTIVE_JOB_STATES),
+            )
+        ),
+    )
+
+
+def _claim_candidate(
+    session: Session, job_id: int, worker_id: str, now: dt.datetime
+) -> bool:
+    """CAS a candidate, rechecking its batch dependency in the UPDATE."""
+    res = session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JOB_QUEUED, _batch_ready())
+        .values(
+            status=JOB_RUNNING,
+            worker_id=worker_id,
+            started_at=now,
+            heartbeat_at=now,
+            attempts=Job.attempts + 1,
+            progress=0,
+            error=None,
+        )
+    )
+    session.commit()
+    return bool(res.rowcount)
+
+
 def claim(
     session: Session, worker_id: str, kinds: Optional[Iterable[str]] = None
 ) -> Optional[Job]:
     """Atomowo zabierz jedno zadanie z kolejki. None gdy pusto.
 
     Compare-and-swap zamiast `FOR UPDATE SKIP LOCKED`, bo ma działać też na
-    SQLite. Przy kilku workerach przegrany po prostu próbuje następnego.
+    SQLite. Przy kilku workerach przegrany odświeża listę kandydatów.
     """
     now = utcnow()
-    earlier = aliased(Job)
     for _ in range(10):
         q = (
             select(Job.id)
             .where(
                 Job.status == JOB_QUEUED,
                 Job.scheduled_at <= now,
-                or_(
-                    Job.batch_id.is_(None),
-                    ~exists(
-                        select(earlier.id).where(
-                            earlier.batch_id == Job.batch_id,
-                            earlier.batch_position < Job.batch_position,
-                            earlier.status.in_(ACTIVE_JOB_STATES),
-                        )
-                    ),
-                ),
+                _batch_ready(),
             )
             .order_by(Job.priority.asc(), Job.scheduled_at.asc(), Job.id.asc())
             .limit(5)
@@ -272,22 +298,11 @@ def claim(
         if not candidates:
             return None
         for job_id in candidates:
-            res = session.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status == JOB_QUEUED)
-                .values(
-                    status=JOB_RUNNING,
-                    worker_id=worker_id,
-                    started_at=now,
-                    heartbeat_at=now,
-                    attempts=Job.attempts + 1,
-                    progress=0,
-                    error=None,
-                )
-            )
-            session.commit()
-            if res.rowcount:
+            if _claim_candidate(session, job_id, worker_id, now):
                 return session.get(Job, job_id)
+            # Another worker changed queue state after our SELECT. Do not use
+            # the rest of this stale list: its batch eligibility may differ.
+            break
     return None
 
 

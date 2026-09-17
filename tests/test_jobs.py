@@ -207,6 +207,20 @@ def test_batch_does_not_block_unrelated_jobs(session):
     assert J.claim(session, "w2").id == unrelated.id
 
 
+def test_claim_cas_rechecks_batch_predecessors(session):
+    first = J.enqueue(
+        session, "process", meeting_id="m1", batch_id="batch", batch_position=1
+    )
+    second = J.enqueue(
+        session, "process", meeting_id="m2", batch_id="batch", batch_position=2
+    )
+    first.status = JOB_RUNNING
+    session.commit()
+
+    assert J._claim_candidate(session, second.id, "stale-worker", utcnow()) is False
+    assert second.status == JOB_QUEUED
+
+
 def test_fail_retries_then_gives_up(session):
     job = J.enqueue(session, "process", meeting_id="m1", max_attempts=2)
     J.claim(session, "w1")
