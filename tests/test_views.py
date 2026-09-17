@@ -323,6 +323,42 @@ def test_api_jobs_expose_human_labels(client, session, meeting):
     assert item["kind_label"] == "Download + transcription"
 
 
+def test_jobs_page_flags_an_overdue_retry(client, session, meeting):
+    session.add(
+        Job(
+            kind="honcho_ingest",
+            status="queued",
+            meeting_id=meeting.id,
+            attempts=1,
+            max_attempts=3,
+            step="retry 1/3 in 30s",
+            scheduled_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=15),
+        )
+    )
+    session.commit()
+    r = client.get("/jobs", headers=HTML)
+    assert "Overdue" in r.text
+    assert "retry 1/3 in 30s" not in r.text
+
+
+def test_api_jobs_flags_an_overdue_retry(client, session, meeting):
+    session.add(
+        Job(
+            kind="honcho_ingest",
+            status="queued",
+            meeting_id=meeting.id,
+            attempts=1,
+            max_attempts=3,
+            step="retry 1/3 in 30s",
+            scheduled_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=15),
+        )
+    )
+    session.commit()
+    item = client.get("/api/jobs").json()["items"][0]
+    assert "Overdue" in item["step"]
+    assert "retry 1/3 in 30s" not in item["step"]
+
+
 def test_bulk_processing_queues_one_chronological_batch(client, session, meeting):
     older = Meeting(
         id="bot-older",

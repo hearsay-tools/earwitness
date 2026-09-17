@@ -47,7 +47,7 @@ from webapp.calendar_routes import router as calendar_router
 from webapp.config import settings
 from webapp.db import get_session, init_db, session_scope
 from webapp.jobs import cancel as cancel_job
-from webapp.jobs import enqueue, queue_stats
+from webapp.jobs import enqueue, queue_stats, queue_step
 from webapp.models import (
     ACTIVE_JOB_STATES,
     DEFAULT_VIEW_STATUSES,
@@ -144,6 +144,7 @@ templates.env.filters["assetstate"] = labels.asset_state
 templates.env.filters["tstate"] = labels.transcript_state
 templates.env.filters["platform"] = labels.platform
 templates.env.globals["JOB_STATUSES"] = labels.JOB_STATUSES
+templates.env.globals["queue_step"] = queue_step
 templates.env.globals["SORTS"] = SORTS
 templates.env.globals["status_hint"] = labels.status_hint
 templates.env.globals["USER_STATUSES"] = labels.USER_STATUSES
@@ -1157,7 +1158,7 @@ def api_jobs(
                 "status": j.status,
                 "status_label": labels.job_status(j.status),
                 "progress": j.progress,
-                "step": j.step,
+                "step": queue_step(j),
                 "meeting_id": j.meeting_id,
                 "batch_id": j.batch_id,
                 "batch_position": j.batch_position,

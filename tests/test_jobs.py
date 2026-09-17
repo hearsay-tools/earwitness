@@ -135,6 +135,43 @@ def test_claim_respects_priority_and_schedule(session):
     assert got.meeting_id == "high", "priorytet 1 jest zaplanowany na później"
 
 
+def test_claim_does_not_starve_an_overdue_retry(session):
+    """A due retry must still be claimed while higher-priority work keeps arriving.
+
+    Without aging, priority is compared before scheduled_at, so a priority-90
+    retry sits forever behind a stream of priority-20 jobs and never increments
+    attempts — silent starvation.
+    """
+    job = J.enqueue(session, "process", meeting_id="low", priority=90, max_attempts=3)
+    claimed = J.claim(session, "w1")
+    assert claimed.id == job.id
+    J.fail(session, job, "boom")
+    assert job.status == JOB_QUEUED
+
+    job.scheduled_at = utcnow() - dt.timedelta(hours=1)
+    session.commit()
+
+    for i in range(8):
+        J.enqueue(session, "process", meeting_id=f"hot-{i}", priority=20)
+
+    got = J.claim(session, "w1")
+    assert got is not None
+    assert got.id == job.id, "overdue retry must not be skipped indefinitely"
+
+
+def test_claim_fresh_jobs_still_preempt_a_just_due_retry(session):
+    """Aging must not let a retry that just became due jump the queue."""
+    job = J.enqueue(session, "process", meeting_id="low", priority=90, max_attempts=3)
+    J.claim(session, "w1")
+    J.fail(session, job, "boom")
+    job.scheduled_at = utcnow()
+    session.commit()
+
+    hot = J.enqueue(session, "process", meeting_id="hot", priority=20)
+    got = J.claim(session, "w1")
+    assert got.id == hot.id
+
+
 def test_claim_filters_by_kind(session):
     J.enqueue(session, "sync_recall", dedupe_key="s")
     assert J.claim(session, "w1", kinds=["process"]) is None

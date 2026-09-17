@@ -34,7 +34,7 @@
        aria-label="Job progress">
     <i style="--p: {{ (job.progress / 100) | round(3) }}"></i>
   </div>
-  <div class="t-sub" data-job-step>{{ job.step or JOB_STATUSES.get(job.status, job.status) }}</div>
+  <div class="t-sub" data-job-step>{{ queue_step(job) or JOB_STATUSES.get(job.status, job.status) }}</div>
 {%- endmacro %}
 
 {# ---------- pobieranie transkryptu ----------
