@@ -56,6 +56,9 @@
             <div class="t-sub">
               {{ j.created_by or 'automatic' }}{% if j.attempts > 1 %} · attempt {{ j.attempts }} of {{ j.max_attempts }}{% endif %}
             </div>
+            {% if j.batch_id %}
+            <div class="t-sub mono" title="Batch {{ j.batch_id }}">Batch {{ j.batch_id[:8] }} · {{ j.batch_position }}/{{ j.batch_size }}</div>
+            {% endif %}
           </div>
         </td>
         <td data-label="Meeting">

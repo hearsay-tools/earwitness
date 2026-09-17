@@ -19,8 +19,8 @@ import logging
 import traceback
 from typing import Any, Callable, Iterable, Optional
 
-from sqlalchemy import or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, or_, select, update
+from sqlalchemy.orm import Session, aliased
 
 from webapp.config import settings
 from webapp.models import (
@@ -155,6 +155,10 @@ def enqueue(
     max_attempts: int = 3,
     created_by: Optional[str] = None,
     delay_seconds: float = 0.0,
+    batch_id: Optional[str] = None,
+    batch_position: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    commit: bool = True,
 ) -> Job:
     """Dodaj zadanie. Idempotentne po `dedupe_key` wśród aktywnych zadań.
 
@@ -164,6 +168,17 @@ def enqueue(
     """
     if kind not in _REGISTRY:
         raise ValueError(f"Unknown job type: {kind!r}. Available: {registered_kinds()}")
+
+    # Dedupe is a check followed by an insert, so serialize every caller for
+    # the same real meeting before that check. PostgreSQL locks the row;
+    # SQLite takes its write lock. Bulk creation locks its full selection
+    # first and then reaches this same reservation re-entrantly.
+    if meeting_id is not None:
+        session.execute(
+            update(Meeting)
+            .where(Meeting.id == meeting_id)
+            .values(synced_at=Meeting.synced_at)
+        )
 
     key = dedupe_key if dedupe_key is not None else f"{kind}:{meeting_id or '-'}"
     existing = session.execute(
@@ -194,7 +209,10 @@ def enqueue(
                 existing.args = merged
             if priority < existing.priority:
                 existing.priority = priority
-            session.commit()
+            if commit:
+                session.commit()
+            else:
+                session.flush()
         return existing
 
     job = Job(
@@ -206,10 +224,52 @@ def enqueue(
         max_attempts=max_attempts,
         created_by=created_by,
         scheduled_at=utcnow() + dt.timedelta(seconds=delay_seconds),
+        batch_id=batch_id,
+        batch_position=batch_position,
+        batch_size=batch_size,
     )
     session.add(job)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     return job
+
+
+def _batch_ready() -> Any:
+    """SQL condition: no earlier item in this job's batch is still active."""
+    earlier = aliased(Job)
+    return or_(
+        Job.batch_id.is_(None),
+        ~exists(
+            select(earlier.id).where(
+                earlier.batch_id == Job.batch_id,
+                earlier.batch_position < Job.batch_position,
+                earlier.status.in_(ACTIVE_JOB_STATES),
+            )
+        ),
+    )
+
+
+def _claim_candidate(
+    session: Session, job_id: int, worker_id: str, now: dt.datetime
+) -> bool:
+    """CAS a candidate, rechecking its batch dependency in the UPDATE."""
+    res = session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JOB_QUEUED, _batch_ready())
+        .values(
+            status=JOB_RUNNING,
+            worker_id=worker_id,
+            started_at=now,
+            heartbeat_at=now,
+            attempts=Job.attempts + 1,
+            progress=0,
+            error=None,
+        )
+    )
+    session.commit()
+    return bool(res.rowcount)
 
 
 def claim(
@@ -218,13 +278,17 @@ def claim(
     """Atomowo zabierz jedno zadanie z kolejki. None gdy pusto.
 
     Compare-and-swap zamiast `FOR UPDATE SKIP LOCKED`, bo ma działać też na
-    SQLite. Przy kilku workerach przegrany po prostu próbuje następnego.
+    SQLite. Przy kilku workerach przegrany odświeża listę kandydatów.
     """
     now = utcnow()
     for _ in range(10):
         q = (
             select(Job.id)
-            .where(Job.status == JOB_QUEUED, Job.scheduled_at <= now)
+            .where(
+                Job.status == JOB_QUEUED,
+                Job.scheduled_at <= now,
+                _batch_ready(),
+            )
             .order_by(Job.priority.asc(), Job.scheduled_at.asc(), Job.id.asc())
             .limit(5)
         )
@@ -234,22 +298,11 @@ def claim(
         if not candidates:
             return None
         for job_id in candidates:
-            res = session.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status == JOB_QUEUED)
-                .values(
-                    status=JOB_RUNNING,
-                    worker_id=worker_id,
-                    started_at=now,
-                    heartbeat_at=now,
-                    attempts=Job.attempts + 1,
-                    progress=0,
-                    error=None,
-                )
-            )
-            session.commit()
-            if res.rowcount:
+            if _claim_candidate(session, job_id, worker_id, now):
                 return session.get(Job, job_id)
+            # Another worker changed queue state after our SELECT. Do not use
+            # the rest of this stale list: its batch eligibility may differ.
+            break
     return None
 
 
@@ -304,7 +357,34 @@ def fail(session: Session, job: Job, error: str, allow_retry: bool = True) -> No
         job.finished_at = utcnow()
         # Dopiero teraz — przy retry spotkanie nadal czeka i „queued" jest prawdą.
         release_meeting_state(session, job, failed=True)
+        _stop_batch_after_failure(session, job)
     session.commit()
+
+
+def _stop_batch_after_failure(session: Session, failed_job: Job) -> None:
+    """Anuluj wszystko za terminalnie nieudanym elementem paczki.
+
+    Retry nie zatrzymuje paczki: wcześniejszy element pozostaje aktywny, więc
+    `claim()` nadal blokuje następców. Dopiero wyczerpanie prób zamyka kolejkę,
+    żeby późniejsze spotkania nie wystartowały po błędzie.
+    """
+    if failed_job.batch_id is None or failed_job.batch_position is None:
+        return
+    remaining = list(
+        session.execute(
+            select(Job).where(
+                Job.batch_id == failed_job.batch_id,
+                Job.batch_position > failed_job.batch_position,
+                Job.status == JOB_QUEUED,
+            )
+        ).scalars()
+    )
+    now = utcnow()
+    for job in remaining:
+        job.status = JOB_CANCELED
+        job.finished_at = now
+        job.step = f"batch stopped after job #{failed_job.id} failed"
+        release_meeting_state(session, job, failed=False)
 
 
 def cancel(session: Session, job: Job) -> bool:
