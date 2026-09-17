@@ -301,14 +301,17 @@ def ingest_transcript(
     delete a create, rollback joba przywróciłby „w pamięci" nad sesją, której
     już nie ma — a backfill by ją pominął. Znacznik sukcesu zapisuje task.
 
-    Dwa podchwytliwe semantyki serwera (issue #35):
+    Dwa podchwytliwe semantyki serwera (issue #35, #41):
     - leniwe `h.session(id)` to get-or-create — dla spotkania bez sesji
       stworzyłoby pustą sesję tylko po to, żeby ją skasować; dlatego delete
       poprzedza sprawdzenie, że aktywna sesja w ogóle istnieje (listowanie
       nie tworzy i widzi tylko aktywne wiersze);
     - delete to soft delete: przez chwilę get-or-create zamiast utworzyć nową
       sesję odpiera 404, więc create jest powtarzane z backoffem, aż deriver
-      usunie stary wiersz. Wypowiedzi idą dopiero po udanym create.
+      usunie stary wiersz. Gdy okno in-process nie wystarcza (wolny deriver
+      albo retry joba, gdy listowanie już nic nie zwraca), 404 to
+      `RetryLater`, nie twardy błąd — job czeka bez zużycia próby.
+      Wypowiedzi idą dopiero po udanym create.
     """
     from honcho import NotFoundError
 
@@ -355,7 +358,11 @@ def ingest_transcript(
             break
         except NotFoundError:
             if attempt + 1 == _CREATE_ATTEMPTS:
-                raise
+                from webapp.jobs import RetryLater
+
+                raise RetryLater(
+                    "previous Honcho session still being removed server-side"
+                ) from None
             time.sleep(min(_CREATE_BACKOFF_S * 2**attempt, 2.0))
             log_line(
                 "previous session still being removed server-side — retrying "

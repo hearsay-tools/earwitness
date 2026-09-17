@@ -89,10 +89,10 @@ class FakeSession:
         self.hub.deleted.append(self.id)
         del self.hub._sessions[self.id]
         # Soft delete, jak w serwerze: wiersz zostaje (`is_active=False`),
-        # a asynchroniczny deriver usuwa go fizycznie dopiero po kilku
-        # kolejnych wywołaniach klienta.
+        # a asynchroniczny deriver usuwa go fizycznie dopiero po
+        # `deriver_delay` kolejnych wywołaniach klienta.
         self.hub.inactive.add(self.id)
-        self.hub._deriver_calls[self.id] = 2
+        self.hub._deriver_calls[self.id] = self.hub.deriver_delay
 
     def add_messages(self, messages: list[dict]) -> list[dict]:
         assert len(messages) <= memory.MESSAGE_BATCH, "batch above the server limit"
@@ -119,6 +119,9 @@ class FakeHoncho:
         # Wiersze soft-deleted, czekające na fizyczne usunięcie przez derivera.
         self.inactive: set[str] = set()
         self._deriver_calls: dict[str, int] = {}
+        # Domyślnie dwa tiki — jak szybki deriver. Testy wolnego soft-delete
+        # podnoszą to powyżej `memory._CREATE_ATTEMPTS`.
+        self.deriver_delay = 2
         self.deleted: list[str] = []
         self.chats: list[dict] = []
         self.chat_answer: str | None = "We agreed to ship on Friday."
@@ -360,6 +363,64 @@ def test_reingest_recreates_the_session(session, meeting, honcho):
         len(honcho._sessions[meeting.id].messages)
         == meeting.latest_transcript.utterance_count
     )
+
+
+def test_reingest_waits_out_soft_delete_longer_than_create_attempts(
+    session, meeting, honcho, monkeypatch
+):
+    """#41: deriver wolniejszy niż `_CREATE_ATTEMPTS` nie może kończyć
+    re-ingestu 404-ką. Listowanie nic nie zwraca (nieaktywny wiersz), a
+    create i tak 404 — to ma być czekanie, nie twardy błąd."""
+    monkeypatch.setattr(memory.time, "sleep", lambda _s: None)
+    t = meeting.latest_transcript
+    memory.ingest_transcript(session, t)
+    honcho.deriver_delay = memory._CREATE_ATTEMPTS + 3
+
+    with pytest.raises(J.RetryLater):
+        memory.ingest_transcript(session, t)
+    assert meeting.id in honcho.inactive
+    assert meeting.id not in honcho._sessions
+    assert t.honcho_synced_at is None
+
+    memory.ingest_transcript(session, t)
+    session.commit()
+    assert meeting.id not in honcho.inactive
+    assert len(honcho._sessions[meeting.id].messages) == t.utterance_count
+    assert t.honcho_synced_at is not None
+
+
+def test_honcho_ingest_job_does_not_burn_attempts_on_create_404(
+    session, meeting, honcho, monkeypatch
+):
+    """#41: retry joba po nieudanym create ma skończyć z sesją i nie
+    wyczerpać `max_attempts`, dopóki deriver trzyma nieaktywny wiersz."""
+    monkeypatch.setattr(memory.time, "sleep", lambda _s: None)
+    t = meeting.latest_transcript
+    memory.ingest_transcript(session, t)
+    session.commit()
+    honcho.deriver_delay = memory._CREATE_ATTEMPTS * 4
+
+    job = J.enqueue(session, "honcho_ingest", meeting_id=meeting.id, max_attempts=3)
+    J.run_job(session, J.claim(session, "w1", kinds=["honcho_ingest"]))
+    session.refresh(job)
+    assert job.status == "queued"
+    assert job.attempts == 0 and job.error is None
+    assert meeting.id in honcho.inactive
+
+    for _ in range(8):
+        job.scheduled_at = dt.datetime.now(dt.timezone.utc)
+        session.commit()
+        claimed = J.claim(session, "w1", kinds=["honcho_ingest"])
+        assert claimed is not None
+        J.run_job(session, claimed)
+        session.refresh(job)
+        if job.status == "done":
+            break
+    assert job.status == "done"
+    assert job.attempts == 1
+    assert honcho._sessions[meeting.id]
+    session.refresh(t)
+    assert t.honcho_synced_at is not None
 
 
 def test_ingest_of_a_meeting_without_a_honcho_session_succeeds(
