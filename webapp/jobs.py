@@ -169,6 +169,17 @@ def enqueue(
     if kind not in _REGISTRY:
         raise ValueError(f"Unknown job type: {kind!r}. Available: {registered_kinds()}")
 
+    # Dedupe is a check followed by an insert, so serialize every caller for
+    # the same real meeting before that check. PostgreSQL locks the row;
+    # SQLite takes its write lock. Bulk creation locks its full selection
+    # first and then reaches this same reservation re-entrantly.
+    if meeting_id is not None:
+        session.execute(
+            update(Meeting)
+            .where(Meeting.id == meeting_id)
+            .values(synced_at=Meeting.synced_at)
+        )
+
     key = dedupe_key if dedupe_key is not None else f"{kind}:{meeting_id or '-'}"
     existing = session.execute(
         select(Job)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from webapp import jobs as J
@@ -89,6 +91,25 @@ def test_enqueue_can_defer_commit_for_atomic_batch_creation(session):
     session.commit()
     with SessionLocal() as other:
         assert other.get(Job, job.id) is not None
+
+
+def test_enqueue_serializes_concurrent_work_for_the_same_meeting(session):
+    session.add(Meeting(id="locked-meeting"))
+    session.commit()
+    first = J.enqueue(session, "process", meeting_id="locked-meeting", commit=False)
+
+    def enqueue_again() -> int:
+        with SessionLocal() as other:
+            return J.enqueue(other, "process", meeting_id="locked-meeting").id
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        second = pool.submit(enqueue_again)
+        time.sleep(0.1)
+        assert not second.done(), (
+            "the meeting reservation must block a concurrent enqueue"
+        )
+        session.commit()
+        assert second.result(timeout=2) == first.id
 
 
 def test_enqueue_rejects_unknown_kind(session):
