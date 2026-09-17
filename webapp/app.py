@@ -27,7 +27,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
@@ -646,6 +646,14 @@ def meetings_bulk(
         return RedirectResponse(f"/jobs?queued={n}", status_code=303)
     if kind not in ("process", "fetch_assets", "transcribe"):
         raise HTTPException(400, "Unknown job type")
+    # Serialize overlapping submissions before checking for active work.
+    # PostgreSQL locks the updated rows; SQLite takes its database write lock.
+    # The self-assignment deliberately changes no meeting data.
+    session.execute(
+        update(Meeting)
+        .where(Meeting.id.in_(meeting_ids))
+        .values(synced_at=Meeting.synced_at)
+    )
     meetings = list(
         session.execute(
             select(Meeting)
@@ -660,7 +668,7 @@ def meetings_bulk(
         session.execute(
             select(Job.meeting_id).where(
                 Job.meeting_id.in_([meeting.id for meeting in meetings]),
-                Job.kind == kind,
+                Job.kind.in_(("process", "fetch_assets", "transcribe")),
                 Job.status.in_(ACTIVE_JOB_STATES),
             )
         ).scalars()
@@ -682,6 +690,7 @@ def meetings_bulk(
             batch_id=batch_id,
             batch_position=position,
             batch_size=size,
+            commit=False,
         )
         if kind in ("process", "transcribe"):
             meeting.transcript_state = "queued"
@@ -928,6 +937,16 @@ def job_retry(
     job = session.get(Job, job_id)
     if job is None:
         raise HTTPException(404, "No such job")
+    if (
+        job.batch_id
+        and session.execute(
+            select(Job.id).where(
+                Job.batch_id == job.batch_id,
+                Job.status.in_(ACTIVE_JOB_STATES),
+            )
+        ).first()
+    ):
+        raise HTTPException(409, "Wait for the batch to finish before retrying")
     clone = enqueue(
         session,
         job.kind,

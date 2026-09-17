@@ -158,6 +158,7 @@ def enqueue(
     batch_id: Optional[str] = None,
     batch_position: Optional[int] = None,
     batch_size: Optional[int] = None,
+    commit: bool = True,
 ) -> Job:
     """Dodaj zadanie. Idempotentne po `dedupe_key` wśród aktywnych zadań.
 
@@ -197,7 +198,10 @@ def enqueue(
                 existing.args = merged
             if priority < existing.priority:
                 existing.priority = priority
-            session.commit()
+            if commit:
+                session.commit()
+            else:
+                session.flush()
         return existing
 
     job = Job(
@@ -214,7 +218,10 @@ def enqueue(
         batch_size=batch_size,
     )
     session.add(job)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     return job
 
 

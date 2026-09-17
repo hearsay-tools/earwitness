@@ -7,6 +7,7 @@ import datetime as dt
 import pytest
 from webapp import jobs as J
 from webapp import tasks  # noqa: F401 — rejestruje typy zadań
+from webapp.db import SessionLocal
 from webapp.models import (
     JOB_CANCELED,
     JOB_FAILED,
@@ -76,6 +77,18 @@ def test_enqueue_allows_requeue_after_finish(session):
     J.finish(session, a, {"ok": True})
     b = J.enqueue(session, "process", meeting_id="m1")
     assert b.id != a.id
+
+
+def test_enqueue_can_defer_commit_for_atomic_batch_creation(session):
+    job = J.enqueue(session, "process", meeting_id="m1", commit=False)
+    assert job.id is not None
+
+    with SessionLocal() as other:
+        assert other.get(Job, job.id) is None
+
+    session.commit()
+    with SessionLocal() as other:
+        assert other.get(Job, job.id) is not None
 
 
 def test_enqueue_rejects_unknown_kind(session):

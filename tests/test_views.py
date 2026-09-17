@@ -384,6 +384,54 @@ def test_bulk_processing_is_atomic_when_a_selected_job_is_already_active(
     assert session.scalar(select(Job).where(Job.meeting_id == other.id)) is None
 
 
+@pytest.mark.parametrize(
+    ("active_kind", "requested_kind"),
+    [
+        ("process", "fetch_assets"),
+        ("fetch_assets", "process"),
+        ("transcribe", "process"),
+    ],
+)
+def test_bulk_processing_rejects_conflicting_active_job_kinds(
+    client, session, meeting, active_kind, requested_kind
+):
+    session.add(Job(kind=active_kind, meeting_id=meeting.id, status="running"))
+    session.commit()
+
+    response = client.post(
+        "/meetings/bulk",
+        data={"meeting_ids": [meeting.id], "kind": requested_kind},
+    )
+
+    assert response.status_code == 409
+    assert session.query(Job).count() == 1
+
+
+def test_retry_rejects_a_batch_while_a_later_item_is_active(client, session, meeting):
+    first = Job(
+        kind="process",
+        meeting_id=meeting.id,
+        status="done",
+        batch_id="batch",
+        batch_position=1,
+        batch_size=2,
+    )
+    later = Job(
+        kind="process",
+        status="running",
+        batch_id="batch",
+        batch_position=2,
+        batch_size=2,
+    )
+    session.add_all([first, later])
+    session.commit()
+
+    response = client.post(f"/jobs/{first.id}/retry")
+
+    assert response.status_code == 409
+    assert session.query(Job).count() == 2
+
+
 # --------------------------------------------------------------------------
 # Transkrypt: pobieranie i stan „w toku”
 # --------------------------------------------------------------------------
