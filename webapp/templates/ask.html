@@ -22,9 +22,7 @@
                    if memory.ready else
                    'No transcripts yet. Process a meeting first, then its transcript lands in memory automatically.') %}
     {% if memory.ready and not memory.pending %}
-      <form method="post" action="/memory/backfill" class="inline" data-busy-form>
-        <button class="btn btn-primary" data-busy-label="Queueing…">Ingest {{ memory.ready }} {{ 'transcript' if memory.ready == 1 else 'transcripts' }}</button>
-      </form>
+      {{ ui.memory_backfill_form(primary=True) }}
     {% elif memory.pending %}
       <a class="btn btn-primary" href="/jobs?status=queued">Watch the queue</a>
     {% else %}
@@ -46,13 +44,13 @@
         {% if memory.pending %}<div class="stat"><b>{{ memory.pending }}</b><span>ingesting</span></div>{% endif %}
       </div>
       {% set missing = memory.ready - memory.synced %}
+      {% if missing > 0 %}
+        <p class="small muted" style="margin-top:var(--s3)">{{ missing }} remaining</p>
+      {% endif %}
       {% if missing > 0 and not memory.pending %}
-        <form method="post" action="/memory/backfill" class="row" data-busy-form style="margin-top:var(--s3)">
-          <button class="btn btn-line btn-sm" data-busy-label="Queueing…"
-                  title="Queues one ingest job per meeting that has a ready transcript but no memory yet.">
-            Ingest {{ missing }} missing {{ 'transcript' if missing == 1 else 'transcripts' }}
-          </button>
-        </form>
+        <div style="margin-top:var(--s3)">
+          {{ ui.memory_backfill_form() }}
+        </div>
       {% elif memory.pending %}
         <p class="small muted" style="margin-top:var(--s3)">Ingest in progress — <a href="/jobs?status=queued">queue</a>.</p>
       {% endif %}

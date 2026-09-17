@@ -70,6 +70,9 @@
           <div class="row">
             <button class="btn btn-sm" name="kind" value="process" data-busy-label="Queueing…">Download and transcribe</button>
             <button class="btn btn-line btn-sm" name="kind" value="fetch_assets" data-busy-label="Queueing…">Download only</button>
+            {% if settings.honcho_enabled %}
+            <button class="btn btn-line btn-sm" name="kind" value="honcho_ingest" data-busy-label="Queueing…">{{ MEMORY_INGEST_ACTION }}</button>
+            {% endif %}
           </div>
         </div>
       </div>

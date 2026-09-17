@@ -96,8 +96,16 @@ Po włączeniu:
 - `/ask` pyta międzyspotkaniowo, panel na stronie spotkania — w zakresie tej
   jednej sesji (widoczny tylko dla obecnych). Odpowiedź przychodzi w tym
   samym żądaniu (sekundy), bez kolejki;
-- `honcho_backfill` (przycisk na `/ask`) kolejkuje ingest dla całego archiwum
-  gotowych transkryptów, po jednym jobie na spotkanie.
+- `honcho_backfill` (przycisk na `/ask`) kolejkuje ingest gotowych transkryptów,
+  po jednym jobie na spotkanie, **od najstarszego**. Formularz ma rozmiar paczki
+  (10 / 25 / 50 / wszystkie) — deriver Honcho odpala LLM na każdej wypowiedzi,
+  więc pierwsza paczka pozwala sprawdzić jakość i koszt zanim wgramy resztę.
+  Wynik joba podaje `queued` i `remaining`; kartę pamięci można klikać aż
+  `remaining` spadnie do zera. Bez `limit` zachowanie jest jak wcześniej
+  (całe archiwum). Z listy spotkań (`/meetings/bulk?kind=honcho_ingest`,
+  tylko gdy `HONCHO_ENABLED`) da się wgrać zaznaczone gotowe transkrypty;
+  `queue_ingest()` deduplikuje nachodzące paczki, więc to samo spotkanie
+  nie dostanie dwóch ingestów.
 
 Uruchomienie: profil compose (cztery kontenery: pgvector, redis, api,
 deriver; własny wolumen bazy) plus dwa wpisy w `.env`:

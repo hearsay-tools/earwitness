@@ -398,6 +398,7 @@ textarea {
   transition: border-color var(--dur-2) var(--ease-standard);
 }
 input:hover, select:hover { border-color: var(--ink-3); }
+select.inline-select { width: auto; min-width: 5.5rem; }
 /* natywne kontrolki daty w ciemnym motywie */
 @media (prefers-color-scheme: dark) {
   input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }

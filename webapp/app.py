@@ -147,6 +147,9 @@ templates.env.globals["SORTS"] = SORTS
 templates.env.globals["status_hint"] = labels.status_hint
 templates.env.globals["USER_STATUSES"] = labels.USER_STATUSES
 templates.env.globals["USER_STATUS_ORDER"] = USER_STATUS_ORDER
+templates.env.globals["MEMORY_INGEST_ACTION"] = labels.MEMORY_INGEST_ACTION
+templates.env.globals["BACKFILL_BATCH_SIZES"] = labels.BACKFILL_BATCH_SIZES
+templates.env.globals["BACKFILL_BATCH_ALL"] = labels.BACKFILL_BATCH_ALL
 
 
 def qs(base: dict[str, Any], **overrides: Any) -> str:
@@ -625,6 +628,21 @@ def meetings_bulk(
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ):
+    if kind == "honcho_ingest":
+        _require_memory()
+        n = 0
+        for mid in meeting_ids:
+            meeting = session.get(Meeting, mid)
+            if meeting is None or meeting.transcript_state != "ready":
+                continue
+            transcript = meeting.latest_transcript
+            if transcript is None:
+                continue
+            memory.queue_ingest(
+                session, meeting, transcript.id, priority=30, created_by=user.email
+            )
+            n += 1
+        return RedirectResponse(f"/jobs?queued={n}", status_code=303)
     n = 0
     for mid in meeting_ids:
         meeting = session.get(Meeting, mid)
@@ -991,15 +1009,23 @@ def ask_submit(
 def trigger_memory_backfill(
     request: Request,
     force: bool = Form(False),
+    limit: str = Form(""),
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ):
     """Wgraj do Honcho archiwum gotowych transkryptów (patrz `honcho_backfill`)."""
     _require_memory()
+    args: dict[str, Any] = {"force": bool(force)}
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = None
+    if cap is not None and cap > 0:
+        args["limit"] = cap
     job = enqueue(
         session,
         "honcho_backfill",
-        args={"force": bool(force)},
+        args=args,
         priority=10,
         dedupe_key="honcho_backfill:manual",
         created_by=user.email,

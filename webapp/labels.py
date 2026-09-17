@@ -29,6 +29,10 @@ JOB_KINDS: dict[str, str] = {
     "honcho_backfill": "Memory backfill",
 }
 
+MEMORY_INGEST_ACTION = "Ingest into memory"
+BACKFILL_BATCH_SIZES: tuple[int, ...] = (10, 25, 50)
+BACKFILL_BATCH_ALL = "All"
+
 JOB_STATUSES: dict[str, str] = {
     "queued": "Waiting",
     "running": "In progress",
