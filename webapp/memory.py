@@ -33,6 +33,7 @@ import datetime as dt
 import hashlib
 import logging
 import re
+import time
 from functools import lru_cache
 from typing import Any, Callable, Optional
 
@@ -56,6 +57,13 @@ log = logging.getLogger("webapp.memory")
 # Reguła Honcho dla id workspace'u / peera / sesji.
 RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _BAD_CHARS = re.compile(r"[^a-zA-Z0-9_-]+")
+# DELETE /sessions w Honcho to soft delete: wiersz zostaje jako
+# `is_active=False`, aż asynchroniczny pracownik serwera (deriver) usunie go
+# fizycznie. Dopóki istnieje, get-or-create (`h.session(...)`) odpowiada 404
+# zamiast utworzyć sesję — create tuż po delete trzeba więc powtarzać.
+_CREATE_ATTEMPTS = 10
+_CREATE_BACKOFF_S = 0.25  # wykładniczo, z górką 2 s
+
 # Limit serwera na jeden POST /messages.
 MESSAGE_BATCH = 100
 # Domyślny `MAX_MESSAGE_SIZE` serwera — dłuższą wypowiedź przycinamy, nie tracimy joba.
@@ -248,21 +256,20 @@ def sync_peers(db: Session, meeting: Meeting) -> dict[str, Any]:
     tego użytkownik, który dopiero co dostał adres, przechodzi
     `user_can_ask()`, ale jego peer nie jest w sesji; usunięty uczestnik
     zachowuje dostęp przez `/ask`. Tanio: jedno `peers()`, `set_peers` tylko
-    przy różnicy. Bez sesji w Honcho (nic nie wgrane) — nic do roboty.
+    przy różnicy. Bez sesji w Honcho (nic nie wgrane) — nic do roboty:
+    sprawdzenie przez listowanie, bo leniwe `h.session()` jest
+    get-or-create i zamiast 404 ożywiłoby pustą sesję.
     """
-    from honcho import NotFoundError
-
     from webapp.tasks import parse_transcript, transcript_text
 
     transcript = meeting.latest_transcript
     if transcript is None or transcript.honcho_synced_at is None:
         return {"skipped": "not ingested"}
     h = client()
-    sess = h.session(meeting.id)
-    try:
-        current = {p.id for p in sess.peers()}
-    except NotFoundError:
+    if not h.sessions(filters={"id": meeting.id}):
         return {"skipped": "no session"}
+    sess = h.session(meeting.id)
+    current = {p.id for p in sess.peers()}
     utterances = parse_transcript(transcript_text(transcript))
     wanted = _roster_ids(meeting, utterances)
     if wanted == current:
@@ -293,6 +300,15 @@ def ingest_transcript(
     i idą do bazy ZANIM skasujemy starą sesję. Gdyby Honcho padło między
     delete a create, rollback joba przywróciłby „w pamięci" nad sesją, której
     już nie ma — a backfill by ją pominął. Znacznik sukcesu zapisuje task.
+
+    Dwa podchwytliwe semantyki serwera (issue #35):
+    - leniwe `h.session(id)` to get-or-create — dla spotkania bez sesji
+      stworzyłoby pustą sesję tylko po to, żeby ją skasować; dlatego delete
+      poprzedza sprawdzenie, że aktywna sesja w ogóle istnieje (listowanie
+      nie tworzy i widzi tylko aktywne wiersze);
+    - delete to soft delete: przez chwilę get-or-create zamiast utworzyć nową
+      sesję odpiera 404, więc create jest powtarzane z backoffem, aż deriver
+      usunie stary wiersz. Wypowiedzi idą dopiero po udanym create.
     """
     from honcho import NotFoundError
 
@@ -319,17 +335,32 @@ def ingest_transcript(
     for t in meeting.transcripts:
         t.honcho_synced_at = None
     db.commit()
-    try:
-        h.session(meeting.id).delete()
-        log_line("previous Honcho session removed")
-    except NotFoundError:
-        pass
+    # Kasujemy tylko aktywną sesję: leniwe `h.session()` jest get-or-create,
+    # a soft-deleted wiersz blokuje create (404), dopóki deriver go nie usunie.
+    if h.sessions(filters={"id": meeting.id}):
+        try:
+            h.session(meeting.id).delete()
+            log_line("previous Honcho session removed")
+        except NotFoundError:
+            pass
     cfg = _peer_config()
-    sess = h.session(
-        meeting.id,
-        metadata=_session_metadata(meeting, transcript),
-        peers=[(peer, cfg) for peer in peers.values()],
-    )
+    sess = None
+    for attempt in range(_CREATE_ATTEMPTS):
+        try:
+            sess = h.session(
+                meeting.id,
+                metadata=_session_metadata(meeting, transcript),
+                peers=[(peer, cfg) for peer in peers.values()],
+            )
+            break
+        except NotFoundError:
+            if attempt + 1 == _CREATE_ATTEMPTS:
+                raise
+            time.sleep(min(_CREATE_BACKOFF_S * 2**attempt, 2.0))
+            log_line(
+                "previous session still being removed server-side — retrying "
+                f"create ({attempt + 1}/{_CREATE_ATTEMPTS - 1})"
+            )
     step(30, f"session {meeting.id} created")
 
     # Wypowiedzi, w paczkach po MESSAGE_BATCH. `created_at` = occurred_at

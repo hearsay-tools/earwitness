@@ -635,6 +635,18 @@ def honcho_backfill(ctx: JobContext) -> dict[str, Any]:
     force = bool(ctx.args.get("force"))
     ctx.progress(10, "finding transcripts to ingest")
     todo = memory.transcripts_to_sync(ctx.session, force=force)
+    remaining = 0
+    raw_limit = ctx.args.get("limit")
+    if raw_limit is not None:
+        try:
+            cap = int(raw_limit)
+        except (TypeError, ValueError):
+            cap = None
+        else:
+            if cap < 0:
+                cap = 0
+            remaining = max(0, len(todo) - cap)
+            todo = todo[:cap]
     for t in todo:
         memory.queue_ingest(
             ctx.session,
@@ -659,7 +671,12 @@ def honcho_backfill(ctx: JobContext) -> dict[str, Any]:
     ctx.progress(
         100, "done", f"queued {len(todo)} memory ingests, {reconciled} rosters updated"
     )
-    return {"queued": len(todo), "reconciled": reconciled, "force": force}
+    return {
+        "queued": len(todo),
+        "remaining": remaining,
+        "reconciled": reconciled,
+        "force": force,
+    }
 
 
 # --------------------------------------------------------------------------
