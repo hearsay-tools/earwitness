@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -388,14 +389,19 @@ def test_pull_requires_its_own_bearer_and_returns_full_document(
     assert response.json()["meeting"]["id"] == meeting.id
     assert response.json()["transcript"]["id"] == transcript.id
     assert PHRASE in response.json()["transcript"]["text"]
+    meeting.transcript_state = "running"
+    session.commit()
+    assert (
+        client.get(path, headers={"Authorization": "Bearer pull-secret"}).status_code
+        == 200
+    )
     assert (
         client.get(
             "/api/transcripts/999999", headers={"Authorization": "Bearer pull-secret"}
         ).status_code
         == 404
     )
-    meeting.transcript_state = "running"
-    session.commit()
+    tmp_path.joinpath("transcript.txt").unlink()
     assert (
         client.get(path, headers={"Authorization": "Bearer pull-secret"}).status_code
         == 404
@@ -428,6 +434,41 @@ def test_notification_is_bounded_and_retry_keeps_ids(session, tmp_path):
     assert first["meeting"]["id"] == retry["meeting"]["id"]
     assert first["transcript"]["id"] == retry["transcript"]["id"]
     assert first["delivery"]["job_id"] == retry["delivery"]["job_id"]
+
+
+def test_reprocessing_preserves_text_for_each_transcript_id(
+    client, session, tmp_path, monkeypatch
+):
+    meeting, _ = _meeting(session, tmp_path)
+    meeting.asset_state = "ready"
+    meeting.asset_dir = str(tmp_path)
+    session.commit()
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "test-key")
+    monkeypatch.setattr(settings, "transcript_api_token", "pull-secret")
+    _txt, raw = tasks._transcript_paths(meeting)
+    raw.write_text('{"words": [], "language_code": "pl"}', encoding="utf-8")
+    utterance = SimpleNamespace(speaker="Ada", start=0.0, end=1.0, text="hello")
+    monkeypatch.setattr(tasks, "diarize_by_energy", lambda *a, **kw: ([utterance], {}))
+    versions = iter(["first version", "second version"])
+    monkeypatch.setattr(tasks, "format_energy_transcript", lambda _: next(versions))
+
+    ids = []
+    for _ in range(2):
+        job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+        J.run_job(session, J.claim(session, "w1", kinds=["transcribe"]))
+        session.refresh(job)
+        assert job.status == "done"
+        ids.append(job.result["transcript_id"])
+
+    headers = {"Authorization": "Bearer pull-secret"}
+    first = client.get(f"/api/transcripts/{ids[0]}", headers=headers)
+    second = client.get(f"/api/transcripts/{ids[1]}", headers=headers)
+    assert first.json()["transcript"]["text"] == "first version"
+    assert second.json()["transcript"]["text"] == "second version"
+    assert (
+        session.get(Transcript, ids[0]).text_path
+        != session.get(Transcript, ids[1]).text_path
+    )
 
 
 def test_post_delivery_sends_meeting_and_transcript(

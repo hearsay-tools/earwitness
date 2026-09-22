@@ -1189,8 +1189,8 @@ def api_transcript(
     if transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
     meeting = session.get(Meeting, transcript.meeting_id)
-    if meeting is None or meeting.transcript_state != "ready":
-        raise HTTPException(status_code=404, detail="Ready transcript not found")
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
     try:
         text = tasks.transcript_text(transcript)
     except FileNotFoundError:

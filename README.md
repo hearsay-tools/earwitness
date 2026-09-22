@@ -237,9 +237,10 @@ linie `Mówca [HH:MM:SS] tekst`). Wymaga nagłówka
 środowiskowej `TRANSCRIPT_API_TOKEN` na serwerze oraz w konsumencie. Jest
 niezależny od opcjonalnego tokenu wysyłanego *do* webhooka. Gdy token jest
 nieustawiony, endpoint zawsze zwraca 401, również przy `AUTH_DISABLED=1`.
-Niepoprawny token zwraca 401, a nieznany lub niegotowy transkrypt 404.
-Id transkryptu z webhooka jest stabilne przy ponownych dostawach; ponowne
-pobranie nie tworzy nowego transkryptu.
+Niepoprawny token zwraca 401, a nieznany transkrypt lub brak jego pliku 404.
+Każdy nowy transkrypt ma własny plik tekstowy, więc ponowne przetworzenie
+spotkania nie zmienia wyniku pobrania starszego ID. Id z webhooka jest
+stabilne przy ponownych dostawach; ponowne pobranie nie tworzy transkryptu.
 
 ### Ograniczenia PoC
 
