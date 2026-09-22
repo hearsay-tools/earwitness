@@ -384,6 +384,10 @@ def test_pull_requires_its_own_bearer_and_returns_full_document(
         client.get(path, headers={"Authorization": f"Bearer {TOKEN}"}).status_code
         == 401
     )
+    assert (
+        client.get(path, headers={"Authorization": b"Bearer caf\xc3\xa9"}).status_code
+        == 401
+    )
     response = client.get(path, headers={"Authorization": "Bearer pull-secret"})
     assert response.status_code == 200
     assert response.json()["meeting"]["id"] == meeting.id

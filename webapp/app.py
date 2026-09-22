@@ -1169,7 +1169,9 @@ def require_transcript_api_token(
     if (
         not configured
         or credentials is None
-        or not secrets.compare_digest(credentials.credentials, configured)
+        or not secrets.compare_digest(
+            credentials.credentials.encode("utf-8"), configured.encode("utf-8")
+        )
     ):
         raise HTTPException(
             status_code=401,
