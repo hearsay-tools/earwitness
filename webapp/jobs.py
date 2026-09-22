@@ -388,6 +388,19 @@ class RetryLater(Exception):
         self.delay_seconds = delay_seconds
 
 
+class JobError(Exception):
+    """Porażka z komunikatem do UI, bez tracebacka.
+
+    `retryable=False` kończy od razu. `retryable=True` idzie w zwykły backoff
+    (30s / 2min / 8min, do `max_attempts`). Komunikat ląduje w `job.error`,
+    w logu joba i w logu procesu — nie wolno w nim umieszczać sekretów.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
 def defer(session: Session, job: Job, reason: str, delay_seconds: float) -> None:
     """Odłóż zadanie na później. `claim()` policzył próbę — oddajemy ją."""
     job.status = JOB_QUEUED
@@ -526,6 +539,15 @@ def release_orphaned_meetings(session: Session) -> int:
     return freed
 
 
+def _append_job_log(job: Job, line: str) -> None:
+    stamp = utcnow().strftime("%H:%M:%S")
+    prev = job.log or ""
+    combined = prev + f"[{stamp}] {line.rstrip()}\n"
+    if len(combined) > MAX_LOG_CHARS:
+        combined = "…(truncated)…\n" + combined[-MAX_LOG_CHARS:]
+    job.log = combined
+
+
 def run_job(session: Session, job: Job) -> None:
     """Wykonaj zadanie w bieżącym wątku. Używane przez workera."""
     fn = get_task(job.kind)
@@ -552,6 +574,16 @@ def run_job(session: Session, job: Job) -> None:
         job = session.get(Job, job.id)
         log.info("job %s (%s) deferred: %s", job.id, job.kind, e.reason)
         defer(session, job, e.reason, e.delay_seconds)
+        return
+    except JobError as e:
+        session.rollback()
+        job = session.get(Job, job.id)
+        message = " ".join(str(e).split())[:2000]
+        _append_job_log(job, message)
+        if not e.retryable:
+            job.step = message[:200]
+        log.warning("job %s (%s) failed: %s", job.id, job.kind, message)
+        fail(session, job, message, allow_retry=e.retryable)
         return
     except Exception as e:  # noqa: BLE001 — worker nie może paść przez jeden task
         session.rollback()

@@ -27,6 +27,7 @@ JOB_KINDS: dict[str, str] = {
     "repair_participants": "Participant repair",
     "honcho_ingest": "Memory ingest",
     "honcho_backfill": "Memory backfill",
+    "webhook_deliver": "Webhook delivery",
 }
 
 MEMORY_INGEST_ACTION = "Ingest into memory"

@@ -383,6 +383,8 @@ h3 {
 /* ---------- pola ---------- */
 input[type="text"],
 input[type="search"],
+input[type="url"],
+input[type="password"],
 input[type="date"],
 select,
 textarea {
