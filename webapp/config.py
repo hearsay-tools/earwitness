@@ -59,6 +59,7 @@ class Settings:
     )
     # Wyłącznik auth do lokalnego devu (NIE włączać na deployu).
     auth_disabled: bool = _bool("AUTH_DISABLED", False)
+    transcript_api_token: str = os.environ.get("TRANSCRIPT_API_TOKEN", "")
 
     # --- Recall.ai ---
     recall_api_key: str = os.environ.get("RECALL_API_KEY", "")
