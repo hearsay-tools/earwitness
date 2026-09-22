@@ -157,28 +157,27 @@ Wyłączenie webhooka między kolejką a wysyłką kończy job jako pominięty
 **POST** (domyślny): ciało `application/json; charset=utf-8`. W URL nie ma
 treści transkryptu.
 
-**GET**: ten sam JSON w parametrze query `payload` (URL-encoded). Nagłówek
-`Authorization` idzie tak samo, jeśli token jest zapisany. Gdy wynikowy URL
-przekroczy 8000 znaków, job pada od razu (bez próby HTTP) — retry nic tu nie
-zmieni, trzeba POST.
+**GET**: ten sam lekki JSON w parametrze query `payload` (URL-encoded).
+Nagłówek `Authorization` idzie tak samo, jeśli token jest zapisany. Gdy
+wynikowy URL przekroczy 8000 znaków, job pada od razu (bez próby HTTP).
 
 Timeout 30 s. Przekierowania nie są śledzone, więc Bearer nie wycieka na inny
 host (3xx = porażka bez retry). Retry: timeout, błąd połączenia, HTTP 408,
 429 i 5xx. Bez retry: pozostałe 4xx, 3xx, za długi GET, brak pliku
 transkryptu. 2xx = dostarczone. Ciało odpowiedzi nie jest zapisywane (serwer
 mógłby odbić token). Żądanie nie idzie przez klienta httpx, który na INFO
-loguje pełny URL — przy GET byłby w nim cały transkrypt.
+loguje pełny URL — także metadane spotkania są prywatne.
 
 Nagłówki: `User-Agent: Earwitness-Webhook/1`,
 `X-Earwitness-Event: transcript.ready`,
 `X-Earwitness-Delivery: <job id>` (stałe przy retry tego samego joba; ręczna
 ponowna wysyłka i nowy transkrypt to nowe id).
 
-Dokument (`schema`: `earwitness.transcript.ready.v1`):
+Dokument (`schema`: `earwitness.transcript.ready.v2`, maksymalnie 16 KiB UTF-8):
 
 ```json
 {
-  "schema": "earwitness.transcript.ready.v1",
+  "schema": "earwitness.transcript.ready.v2",
   "event": "transcript.ready",
   "delivered_at": "2026-09-22T12:00:00+00:00",
   "delivery": {"job_id": 15, "attempt": 1},
@@ -217,16 +216,31 @@ Dokument (`schema`: `earwitness.transcript.ready.v1`):
     "utterance_count": 2,
     "word_count": 5,
     "duration_seconds": 12.0,
-    "speakers": [{"name": "Ala", "seconds": 12.0}],
-    "text": "Ala [00:00:01] cześć\n"
-  }
+    "speakers": [{"name": "Ala", "seconds": 12.0}]
+  },
+  "truncated": {"participants": false, "speakers": false}
 }
 ```
 
-`transcript.text` to ten sam plik co pobranie `.txt` (linie
-`Mówca [HH:MM:SS] tekst`). Uczestnicy to ludzie (Recall + kalendarz), bez
-botów-notetakerów. Pola mogą być `null`. Do idempotencji służy
-`delivery.job_id`, nie `delivered_at` (to czas tej próby).
+Webhook nie zawiera `transcript.text`. Uczestnicy to ludzie (Recall +
+kalendarz), bez botów-notetakerów. Pola mogą być `null`. Długie wartości
+tekstowe metadanych są skracane do 256 znaków; jeśli nadal przekraczają limit,
+listy uczestników i mówców są skracane, a `truncated` wskazuje którą listę.
+Pełne dane zawsze są dostępne przez pull API. Do idempotencji służą
+`meeting.id` i `transcript.id`; `delivery.job_id` jest stały przy retry
+tego samego joba, a `delivered_at` i `attempt` opisują próbę.
+
+**Pull API:** `GET /api/transcripts/{transcript_id}` zwraca obiekty `meeting`
+i `transcript` z pełnym `transcript.text` (ten sam plik co pobranie `.txt`,
+linie `Mówca [HH:MM:SS] tekst`). Wymaga nagłówka
+`Authorization: Bearer <TRANSCRIPT_API_TOKEN>`. Token ustaw w zmiennej
+środowiskowej `TRANSCRIPT_API_TOKEN` na serwerze oraz w konsumencie. Jest
+niezależny od opcjonalnego tokenu wysyłanego *do* webhooka. Gdy token jest
+nieustawiony, endpoint zawsze zwraca 401, również przy `AUTH_DISABLED=1`.
+Niepoprawny token zwraca 401, a nieznany transkrypt lub brak jego pliku 404.
+Każdy nowy transkrypt ma własny plik tekstowy, więc ponowne przetworzenie
+spotkania nie zmienia wyniku pobrania starszego ID. Id z webhooka jest
+stabilne przy ponownych dostawach; ponowne pobranie nie tworzy transkryptu.
 
 ### Ograniczenia PoC
 

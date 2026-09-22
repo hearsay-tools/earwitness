@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Optional
@@ -250,6 +251,9 @@ def _do_pipeline(
         stream.flush()
 
     text = format_energy_transcript(utts)
+    # Each completed row owns its text. Reprocessing may reuse raw ASR, but
+    # must never overwrite the file referenced by an earlier webhook id.
+    txt_path = txt_path.with_name(f"{txt_path.stem}.{uuid.uuid4().hex}.txt")
     txt_path.write_text(text, encoding="utf-8")
     ctx.progress(92, "saving transcript", f"→ {txt_path}")
 
@@ -415,7 +419,7 @@ def _webhook_transcript(ctx: JobContext, meeting: Meeting) -> Transcript:
 
 @task(webhook.KIND)
 def webhook_deliver(ctx: JobContext) -> dict[str, Any]:
-    """Wyślij info o spotkaniu i gotowy transkrypt na globalny webhook."""
+    """Wyślij lekkie powiadomienie o gotowym transkrypcie."""
     cfg = webhook.get_config(ctx.session)
     if not cfg.enabled:
         ctx.progress(100, "webhook disabled — skipped", "webhook disabled — skipped")
@@ -425,15 +429,12 @@ def webhook_deliver(ctx: JobContext) -> dict[str, Any]:
     except ValueError as exc:
         raise JobError(str(exc), retryable=False) from None
     transcript = _webhook_transcript(ctx, meeting)
-    try:
-        text = transcript_text(transcript)
-    except FileNotFoundError:
-        raise JobError("transcript file is missing", retryable=False) from None
+    if not transcript_file_path(transcript.text_path).exists():
+        raise JobError("transcript file is missing", retryable=False)
     ctx.progress(30, "sending webhook")
     result = webhook.deliver(
         meeting,
         transcript,
-        text,
         cfg,
         job_id=ctx.job.id,
         attempt=ctx.job.attempts,

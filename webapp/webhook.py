@@ -8,7 +8,7 @@ jest krokiem transkrypcji: porażka zostaje w kolejce i nie rusza
 Token Bearer jest czytany z bazy dopiero przy wysyłce. Nie wraca do HTML,
 nie wchodzi do `job.args` / `job.result` / `job.error` / logu joba. Żądanie
 idzie wprost przez transport httpx, bez klienta, który loguje pełny URL
-(przy GET w query siedzi treść transkryptu) i bez podążania za przekierowaniem
+(przy GET w query siedzą metadane spotkania) i bez podążania za przekierowaniem
 (Bearer nie może wyciec na inny host).
 """
 
@@ -41,7 +41,8 @@ log = logging.getLogger("webapp.webhook")
 
 KIND = "webhook_deliver"
 EVENT = "transcript.ready"
-SCHEMA = "earwitness.transcript.ready.v1"
+SCHEMA = "earwitness.transcript.ready.v2"
+MAX_PAYLOAD_BYTES = 16 * 1024
 METHODS = ("POST", "GET")
 MAX_ATTEMPTS = 3
 TIMEOUT_SECONDS = 30.0
@@ -296,66 +297,107 @@ def _iso(value: Optional[dt.datetime]) -> Optional[str]:
     return value.astimezone(dt.timezone.utc).isoformat()
 
 
+def meeting_data(meeting: Meeting) -> dict[str, Any]:
+    return {
+        "id": meeting.id,
+        "title": meeting.title,
+        "platform": meeting.platform,
+        "meeting_url": meeting.meeting_url,
+        "native_id": meeting.meeting_native_id,
+        "occurred_at": _iso(meeting.occurred_at),
+        "started_at": _iso(meeting.started_at),
+        "completed_at": _iso(meeting.completed_at),
+        "duration_seconds": meeting.duration_seconds,
+        "status": meeting.status_group,
+        "user_status": meeting.user_status,
+        "organizer": meeting.calendar_organizer,
+        "calendar_event_id": meeting.calendar_event_id,
+        "calendar_link": meeting.calendar_html_link,
+        "recording_id": meeting.recording_id,
+        "participants": [
+            {
+                "name": person.name,
+                "email": person.email,
+                "source": person.source,
+                "is_host": person.is_host,
+                "speaking_seconds": person.speaking_seconds,
+            }
+            for person in meeting.human_participants
+        ],
+    }
+
+
+def transcript_data(transcript: Transcript) -> dict[str, Any]:
+    return {
+        "id": transcript.id,
+        "recording_id": transcript.recording_id,
+        "engine": transcript.engine,
+        "language": transcript.language,
+        "created_at": _iso(transcript.created_at),
+        "utterance_count": transcript.utterance_count,
+        "word_count": transcript.word_count,
+        "duration_seconds": transcript.duration_seconds,
+        "speakers": transcript.speakers or [],
+    }
+
+
+def full_document(
+    meeting: Meeting, transcript: Transcript, text: str
+) -> dict[str, Any]:
+    """Full transcript for the authenticated pull API."""
+    return {
+        "meeting": meeting_data(meeting),
+        "transcript": {**transcript_data(transcript), "text": text},
+    }
+
+
+def _shorten(value: Any) -> Any:
+    """Bound arbitrary metadata strings, including nested speaker details."""
+    if isinstance(value, str):
+        return value[:256]
+    if isinstance(value, list):
+        return [_shorten(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key)[:64]: _shorten(item) for key, item in value.items()}
+    return value
+
+
+def _encoded_size(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
 def build_payload(
     meeting: Meeting,
     transcript: Transcript,
-    text: str,
     *,
     delivered_at: dt.datetime,
     job_id: Optional[int],
     attempt: int,
 ) -> dict[str, Any]:
-    """Dokument `earwitness.transcript.ready.v1`.
-
-    `transcript.text` to ten sam plik co pobranie `.txt`. Uczestnicy to ludzie
-    (Recall + kalendarz), bez botów-notetakerów. `delivery.job_id` jest stałe
-    przy retry; `delivered_at` i `attempt` opisują tę próbę.
-    """
-    return {
+    """Bounded notification. Stable ids survive every retry of a job."""
+    meeting_part = _shorten(meeting_data(meeting))
+    transcript_part = _shorten(transcript_data(transcript))
+    payload = {
         "schema": SCHEMA,
         "event": EVENT,
         "delivered_at": _iso(delivered_at),
         "delivery": {"job_id": job_id, "attempt": attempt},
-        "meeting": {
-            "id": meeting.id,
-            "title": meeting.title,
-            "platform": meeting.platform,
-            "meeting_url": meeting.meeting_url,
-            "native_id": meeting.meeting_native_id,
-            "occurred_at": _iso(meeting.occurred_at),
-            "started_at": _iso(meeting.started_at),
-            "completed_at": _iso(meeting.completed_at),
-            "duration_seconds": meeting.duration_seconds,
-            "status": meeting.status_group,
-            "user_status": meeting.user_status,
-            "organizer": meeting.calendar_organizer,
-            "calendar_event_id": meeting.calendar_event_id,
-            "calendar_link": meeting.calendar_html_link,
-            "recording_id": meeting.recording_id,
-            "participants": [
-                {
-                    "name": person.name,
-                    "email": person.email,
-                    "source": person.source,
-                    "is_host": person.is_host,
-                    "speaking_seconds": person.speaking_seconds,
-                }
-                for person in meeting.human_participants
-            ],
-        },
-        "transcript": {
-            "id": transcript.id,
-            "recording_id": transcript.recording_id,
-            "engine": transcript.engine,
-            "language": transcript.language,
-            "created_at": _iso(transcript.created_at),
-            "utterance_count": transcript.utterance_count,
-            "word_count": transcript.word_count,
-            "duration_seconds": transcript.duration_seconds,
-            "speakers": transcript.speakers or [],
-            "text": text,
-        },
+        "meeting": meeting_part,
+        "transcript": transcript_part,
+        "truncated": {"participants": False, "speakers": False},
     }
+    while _encoded_size(payload) > MAX_PAYLOAD_BYTES:
+        participants = meeting_part["participants"]
+        speakers = transcript_part["speakers"]
+        if participants and (len(participants) >= len(speakers) or not speakers):
+            participants.pop()
+            payload["truncated"]["participants"] = True
+        elif speakers:
+            speakers.pop()
+            payload["truncated"]["speakers"] = True
+        else:
+            raise ValueError("webhook metadata exceeds payload cap")
+    return payload
 
 
 def send_request(
@@ -368,7 +410,7 @@ def send_request(
 ) -> httpx.Response:
     """Jedno żądanie, bez logowania URL i bez podążania za 3xx.
 
-    Klient httpx na INFO zapisuje pełny URL. Przy GET jest w nim transkrypt,
+    Klient httpx na INFO zapisuje pełny URL. Przy GET są w nim metadane,
     więc idziemy transportem. Timeout siedzi w extensions, tak jak ustawia go
     klient. Status jest w nagłówkach — ciała nie czytamy. Duża albo wolna
     odpowiedź nie może zjeść pamięci ani zmienić przyjętej dostawy w retry.
@@ -400,7 +442,6 @@ def _fail(message: str, *, retryable: bool, token: str) -> None:
 def deliver(
     meeting: Meeting,
     transcript: Transcript,
-    text: str,
     cfg: WebhookConfig,
     *,
     job_id: Optional[int] = None,
@@ -411,7 +452,7 @@ def deliver(
 
     2xx = dostarczone. 408, 429 i 5xx oraz błąd sieci są do retry. Inne 4xx,
     3xx i za długi GET padają od razu. Komunikat błędu nie zawiera tokenu,
-    ciała odpowiedzi ani (przy GET) URL z transkryptem.
+    ciała odpowiedzi ani (przy GET) URL z metadanymi.
     """
     if not cfg.enabled:
         return {"skipped": True, "reason": "webhook disabled"}
@@ -419,7 +460,6 @@ def deliver(
     payload = build_payload(
         meeting,
         transcript,
-        text,
         delivered_at=utcnow(),
         job_id=job_id,
         attempt=attempt,

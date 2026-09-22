@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import logging
 import math
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,7 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, func, select, update
@@ -1154,6 +1156,50 @@ def trigger_memory_backfill(
 # --------------------------------------------------------------------------
 # JSON API (odświeżanie w tle + integracje)
 # --------------------------------------------------------------------------
+
+
+pull_bearer = HTTPBearer(auto_error=False)
+
+
+def require_transcript_api_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(pull_bearer),
+) -> None:
+    """Independent server-to-server credential; disabled when unset."""
+    configured = settings.transcript_api_token
+    if (
+        not configured
+        or credentials is None
+        or not secrets.compare_digest(
+            credentials.credentials.encode("utf-8"), configured.encode("utf-8")
+        )
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid transcript API token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+@app.get("/api/transcripts/{transcript_id}")
+def api_transcript(
+    transcript_id: int,
+    session: Session = Depends(get_session),
+    _auth: None = Depends(require_transcript_api_token),
+):
+    """Pull the full ready transcript and meeting using TRANSCRIPT_API_TOKEN."""
+    transcript = session.get(Transcript, transcript_id)
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    meeting = session.get(Meeting, transcript.meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    try:
+        text = tasks.transcript_text(transcript)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Transcript file not found"
+        ) from None
+    return webhook.full_document(meeting, transcript, text)
 
 
 def _meeting_json(m: Meeting) -> dict[str, Any]:
