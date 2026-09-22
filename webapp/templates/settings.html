@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="head">
+  <h1>Settings<span class="u">_</span></h1>
+  <p class="sub" style="margin:0">
+    One webhook for every finished transcript.
+  </p>
+</div>
+
+{% if saved %}
+<div class="notice notice-ok" role="status"><div>Webhook settings saved.</div></div>
+{% endif %}
+{% if error %}
+<div class="notice notice-err" role="alert"><div>{{ error }}</div></div>
+{% endif %}
+
+<section class="card card-pad" aria-labelledby="webhook-title">
+  <div class="row-between">
+    <div>
+      <h2 id="webhook-title">Transcript webhook</h2>
+    </div>
+    {% if webhook.enabled %}
+      <span class="badge b-ready">On</span>
+    {% else %}
+      <span class="badge b-none">Off</span>
+    {% endif %}
+  </div>
+  <p class="hint">
+    When a transcript becomes ready, Earwitness queues a delivery job.
+    A failed delivery stays in the queue and does not change the transcript.
+    Leave the URL empty to stop delivery. Transcripts that are already ready
+    are not sent until you use Send to webhook on the meeting.
+  </p>
+  <form method="post" action="/settings/webhook" data-busy-form>
+    <div class="field">
+      <label for="webhook-url">Webhook URL</label>
+      <input type="url" id="webhook-url" name="url" value="{{ webhook.url }}"
+             maxlength="2000" placeholder="https://example.com/earwitness"
+             autocomplete="off" spellcheck="false" autocapitalize="off">
+      <p class="hint">http or https, with a host. No username, password, or secret in the URL.</p>
+    </div>
+    <fieldset class="mode-fieldset">
+      <legend>Method</legend>
+      <div class="mode-grid">
+        <label class="mode-option">
+          <input type="radio" name="method" value="POST"{% if webhook.method == 'POST' %} checked{% endif %} required>
+          <span><strong>POST</strong><small>JSON body. Use this for full transcripts.</small></span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="method" value="GET"{% if webhook.method == 'GET' %} checked{% endif %}>
+          <span><strong>GET</strong><small>Same JSON in the payload query parameter. Fails if the URL would exceed {{ webhook_get_limit }} characters.</small></span>
+        </label>
+      </div>
+    </fieldset>
+    <div class="field">
+      <label for="webhook-token">Bearer token</label>
+      <input type="password" id="webhook-token" name="bearer_token" value=""
+             maxlength="2000" autocomplete="new-password" spellcheck="false"
+             placeholder="{{ 'Leave blank to keep the saved token' if webhook.has_token else 'Optional' }}">
+      {% if webhook.has_token %}
+        <p class="hint">A token is saved. It is not shown again. Leave this blank to keep it.</p>
+        <label class="check">
+          <input type="checkbox" name="clear_token" value="true"> Remove saved token
+        </label>
+      {% else %}
+        <p class="hint">Optional. Sent as Authorization: Bearer, and never written to the queue log.</p>
+      {% endif %}
+    </div>
+    <button class="btn btn-primary" data-busy-label="Saving…">Save webhook</button>
+  </form>
+</section>
+{% endblock %}

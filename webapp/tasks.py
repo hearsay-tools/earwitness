@@ -29,10 +29,10 @@ from transcripts.energy_diarization import format_transcript as format_energy_tr
 from transcripts.recall_client import download_bot_assets
 from transcripts.transcribe import transcribe as elevenlabs_transcribe
 
-from webapp import memory
+from webapp import memory, webhook
 from webapp.app_settings import get_autoprocess
 from webapp.config import settings
-from webapp.jobs import JobContext, RetryLater, enqueue, task
+from webapp.jobs import JobContext, JobError, RetryLater, enqueue, task
 from webapp.models import Meeting, Transcript, User, utcnow
 from webapp.recall_sync import (
     adopt_disk_recording,
@@ -299,6 +299,32 @@ def _merge_speaking_time(meeting: Meeting, talk_time: dict[str, float]) -> None:
             p.speaking_seconds = round(seconds, 1)
 
 
+def _queue_webhook(
+    ctx: JobContext, meeting: Meeting, transcript_id: Any
+) -> Optional[int]:
+    """Po udanym pipeline'ie dołóż dostawę webhooka, jeśli URL jest zapisany.
+
+    Osobny job: transkrypt zostaje gotowy niezależnie od tego, czy odbiorca
+    odpowie. Błąd kolejkowania nie może przewrócić zadania transkrypcji.
+    """
+    if not transcript_id:
+        return None
+    try:
+        job = webhook.queue_delivery(
+            ctx.session,
+            meeting,
+            int(transcript_id),
+            created_by="automatic",
+        )
+    except Exception as exc:  # noqa: BLE001 — dostawa nie może zepsuć transkrypcji
+        ctx.log(f"webhook not queued: {type(exc).__name__}")
+        return None
+    if job is None:
+        return None
+    ctx.log(f"webhook delivery queued (job #{job.id})")
+    return job.id
+
+
 def _queue_memory_ingest(
     ctx: JobContext, meeting: Meeting, transcript_id: Any
 ) -> Optional[int]:
@@ -340,6 +366,7 @@ def transcribe_task(ctx: JobContext) -> dict[str, Any]:
     result["memory_job"] = _queue_memory_ingest(
         ctx, meeting, result.get("transcript_id")
     )
+    result["webhook_job"] = _queue_webhook(ctx, meeting, result.get("transcript_id"))
     ctx.progress(100, "done")
     return result
 
@@ -356,9 +383,66 @@ def process_meeting(ctx: JobContext) -> dict[str, Any]:
         meeting.transcript_error = f"{type(e).__name__}: {e}"[:2000]
         ctx.session.commit()
         raise
-    memory_job = _queue_memory_ingest(ctx, meeting, pipe_result.get("transcript_id"))
+    transcript_id = pipe_result.get("transcript_id")
+    memory_job = _queue_memory_ingest(ctx, meeting, transcript_id)
+    webhook_job = _queue_webhook(ctx, meeting, transcript_id)
     ctx.progress(100, "done")
-    return {"fetch": fetch_result, "pipeline": pipe_result, "memory_job": memory_job}
+    return {
+        "fetch": fetch_result,
+        "pipeline": pipe_result,
+        "memory_job": memory_job,
+        "webhook_job": webhook_job,
+    }
+
+
+def _webhook_transcript(ctx: JobContext, meeting: Meeting) -> Transcript:
+    raw = ctx.args.get("transcript_id")
+    try:
+        transcript_id = int(raw)
+    except (TypeError, ValueError):
+        raise JobError(
+            "webhook delivery is missing transcript_id", retryable=False
+        ) from None
+    transcript = ctx.session.get(Transcript, transcript_id)
+    if transcript is None or transcript.meeting_id != meeting.id:
+        raise JobError(
+            f"transcript {transcript_id} is not on this meeting",
+            retryable=False,
+        )
+    return transcript
+
+
+@task(webhook.KIND)
+def webhook_deliver(ctx: JobContext) -> dict[str, Any]:
+    """Wyślij info o spotkaniu i gotowy transkrypt na globalny webhook."""
+    try:
+        meeting = _meeting(ctx)
+    except ValueError as exc:
+        raise JobError(str(exc), retryable=False) from None
+    transcript = _webhook_transcript(ctx, meeting)
+    try:
+        text = transcript_text(transcript)
+    except FileNotFoundError:
+        raise JobError("transcript file is missing", retryable=False) from None
+    ctx.progress(30, "sending webhook")
+    cfg = webhook.get_config(ctx.session)
+    result = webhook.deliver(
+        meeting,
+        transcript,
+        text,
+        cfg,
+        job_id=ctx.job.id,
+        attempt=ctx.job.attempts,
+    )
+    if result.get("skipped"):
+        ctx.progress(100, "webhook disabled — skipped", "webhook disabled — skipped")
+    else:
+        ctx.progress(
+            100,
+            "delivered",
+            f"{result['method']} {result['url']} → {result['status_code']}",
+        )
+    return result
 
 
 # --------------------------------------------------------------------------
