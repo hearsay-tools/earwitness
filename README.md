@@ -45,7 +45,8 @@ Konfiguracja nagrywania z kalendarza: [Recall Calendar V1 — wdrożenie i migra
 |---|---|
 | Logowanie | Google OIDC, scope `calendar.readonly`. `ALLOWED_GOOGLE_DOMAINS` ogranicza dostęp do wskazanych domen (weryfikacja claimu `hd` **i** sufiksu maila; `hd` idzie też jako hint do Google). |
 | Lista spotkań | Filtry: data (zakres + skróty 7/30 dni), status, uczestnicy (koniunkcja — „byli oboje”), stan transkryptu. Szukajka po tytule, osobach, mailach i ID; każde słowo musi pasować. Sortowanie, paginacja, akcje masowe. |
-| Kolejka | Zadania `sync_recall`, `sync_calendar`, `fetch_assets`, `transcribe`, `process`, `cleanup_audio`. Postęp i log na żywo, retry z backoffem, anulowanie. |
+| Kolejka | Zadania `sync_recall`, `sync_calendar`, `fetch_assets`, `transcribe`, `process`, `cleanup_audio`, `webhook_deliver`. Postęp i log na żywo, retry z backoffem, anulowanie. |
+| Webhook | Po gotowym transkrypcie job wysyła info o spotkaniu i treść na URL z `/settings` (POST albo GET, opcjonalny Bearer). Porażka dostawy nie cofa transkryptu. |
 | Transkrypty | Przeglądanie z wyszukiwaniem w treści i filtrem po mówcy, czas mówienia per osoba, pobieranie jako `.txt` / `.md` / `.vtt` / `.json` / surowy `.raw.json`. |
 | API | `/api/meetings`, `/api/jobs`, `/api/jobs/{id}/log`, `/healthz`. Swagger: `/api/docs`. |
 | Pamięć spotkań (opcjonalnie) | Gotowe transkrypty lecą do self-hostowanego [Honcho](https://github.com/plastic-labs/honcho); pytania w języku naturalnym o jedno spotkanie (panel na stronie spotkania) i o wszystkie, w których użytkownik był (`/ask`). Patrz „Pamięć spotkań (Honcho)”. |
@@ -130,6 +131,103 @@ obserwator × mówca; pytania o jedno spotkanie ich nie potrzebują). Transkrypt
 osobny, niezmodyfikowany serwis z obrazu `ghcr.io/plastic-labs/honcho:v3.2.0`
 (SDK `honcho-ai` 2.4.0).
 
+### Webhook transkryptu
+
+Jedno miejsce docelowe na całą instancję, konfigurowane w UI (`/settings`),
+nie zmiennymi env. Puste URL wyłącza wysyłkę. Zapisany Bearer token nie jest
+już pokazywany — pole zostaje puste, a formularz mówi tylko, że token jest
+zapisany. Żeby go usunąć, trzeba zaznaczyć „Remove saved token”. Nowy token
+nadpisuje stary. Token nie trafia do HTML, logów joba, `job.error`,
+`job.result` ani odpowiedzi API. URL z userinfo, sekretem w query albo z
+wklejonym tokenem jest odrzucany, bo URL wraca do formularza.
+
+Gdy pipeline (`transcribe` albo `process`) zapisze transkrypt i URL jest
+ustawione, kolejkowany jest job `webhook_deliver` (do 3 prób, backoff
+30 s / 2 min / 8 min — ten sam co reszta kolejki). Dostawa nie jest krokiem
+pipeline'u: padnięty webhook nie zmienia `transcript_state` (zostaje `ready`)
+i nie kasuje pliku. Nieudane dostawy widać w Queue (status Failed albo retry,
+powód bez sekretu) i da się je ponowić. Na stronie spotkania z gotowym
+transkryptem jest „Send to webhook” — ten sam job, nie osobna ścieżka.
+Historyczne transkrypty same nie wychodzą przy zapisie URL.
+
+Konfiguracja jest czytana przy wykonaniu joba, nie przy kolejkowniu.
+Wyłączenie webhooka między kolejką a wysyłką kończy job jako pominięty
+(`skipped`), bez żądania HTTP.
+
+**POST** (domyślny): ciało `application/json; charset=utf-8`. W URL nie ma
+treści transkryptu.
+
+**GET**: ten sam JSON w parametrze query `payload` (URL-encoded). Nagłówek
+`Authorization` idzie tak samo, jeśli token jest zapisany. Gdy wynikowy URL
+przekroczy 8000 znaków, job pada od razu (bez próby HTTP) — retry nic tu nie
+zmieni, trzeba POST.
+
+Timeout 30 s. Przekierowania nie są śledzone, więc Bearer nie wycieka na inny
+host (3xx = porażka bez retry). Retry: timeout, błąd połączenia, HTTP 408,
+429 i 5xx. Bez retry: pozostałe 4xx, 3xx, za długi GET, brak pliku
+transkryptu. 2xx = dostarczone. Ciało odpowiedzi nie jest zapisywane (serwer
+mógłby odbić token). Żądanie nie idzie przez klienta httpx, który na INFO
+loguje pełny URL — przy GET byłby w nim cały transkrypt.
+
+Nagłówki: `User-Agent: Earwitness-Webhook/1`,
+`X-Earwitness-Event: transcript.ready`,
+`X-Earwitness-Delivery: <job id>` (stałe przy retry tego samego joba; ręczna
+ponowna wysyłka i nowy transkrypt to nowe id).
+
+Dokument (`schema`: `earwitness.transcript.ready.v1`):
+
+```json
+{
+  "schema": "earwitness.transcript.ready.v1",
+  "event": "transcript.ready",
+  "delivered_at": "2026-09-22T12:00:00+00:00",
+  "delivery": {"job_id": 15, "attempt": 1},
+  "meeting": {
+    "id": "bot-id",
+    "title": "Roadmap",
+    "platform": "google_meet",
+    "meeting_url": null,
+    "native_id": null,
+    "occurred_at": "2026-09-22T10:00:00+00:00",
+    "started_at": "2026-09-22T10:00:00+00:00",
+    "completed_at": null,
+    "duration_seconds": 1800,
+    "status": "done",
+    "user_status": "ready",
+    "organizer": null,
+    "calendar_event_id": null,
+    "calendar_link": null,
+    "recording_id": "rec-id",
+    "participants": [
+      {
+        "name": "Ala",
+        "email": "ala@example.com",
+        "source": "recall",
+        "is_host": true,
+        "speaking_seconds": 12.0
+      }
+    ]
+  },
+  "transcript": {
+    "id": 3,
+    "recording_id": "rec-id",
+    "engine": "pipeline-recall",
+    "language": "pl",
+    "created_at": "2026-09-22T11:00:00+00:00",
+    "utterance_count": 2,
+    "word_count": 5,
+    "duration_seconds": 12.0,
+    "speakers": [{"name": "Ala", "seconds": 12.0}],
+    "text": "Ala [00:00:01] cześć\n"
+  }
+}
+```
+
+`transcript.text` to ten sam plik co pobranie `.txt` (linie
+`Mówca [HH:MM:SS] tekst`). Uczestnicy to ludzie (Recall + kalendarz), bez
+botów-notetakerów. Pola mogą być `null`. Do idempotencji służy
+`delivery.job_id`, nie `delivered_at` (to czas tej próby).
+
 ### Ograniczenia PoC
 
 - Transkrypty i audio leżą na dysku lokalnym (`output/`) — przy deployu na
@@ -142,7 +240,9 @@ osobny, niezmodyfikowany serwis z obrazu `ghcr.io/plastic-labs/honcho:v3.2.0`
   wyłączone. Deduplikacja po `dedupe_key` chroni przed podwójnym odpaleniem
   tego samego spotkania, ale nie przed świadomym `force`.
 - Brak ról i uprawnień — każdy zalogowany z dozwolonej domeny widzi wszystkie
-  transkrypty.
+  transkrypty i może zmienić webhook.
+- Token webhooka leży w `app_settings` jak inne sekrety w bazie (refresh token
+  Google). Nie wraca do HTML ani logów jobów, ale zrzut bazy go zawiera.
 
 ## CLI
 

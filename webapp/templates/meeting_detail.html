@@ -254,6 +254,23 @@
           <tr><td>Bot ID</td><td class="mono">{{ m.id }}</td></tr>
           <tr><td>Recording ID</td><td class="mono">{{ m.recording_id or '—' }}</td></tr>
           {% if m.asset_dir %}<tr><td>Files</td><td class="mono small">{{ m.asset_dir }}</td></tr>{% endif %}
+          {% if transcript %}
+          <tr><td>Webhook</td>
+              <td>
+                {% if webhook_enabled %}
+                  <form method="post" action="/meetings/{{ m.id }}/webhook" class="inline" data-busy-form>
+                    <button class="btn btn-line btn-sm" data-busy-label="Queueing…"
+                            title="Queues delivery of this transcript. A failure stays in the queue and does not change the transcript.">
+                      Send to webhook
+                    </button>
+                  </form>
+                  <div class="t-sub">Also sent when a transcript becomes ready. Failures stay in the queue.</div>
+                {% else %}
+                  <span class="badge b-none">not configured</span>
+                  <div class="t-sub"><a href="/settings">Set up delivery</a></div>
+                {% endif %}
+              </td></tr>
+          {% endif %}
           {% if settings.honcho_enabled and transcript %}
           <tr><td>Memory</td>
               <td>

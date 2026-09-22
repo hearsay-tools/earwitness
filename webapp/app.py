@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from webapp import labels, memory, tasks
+from webapp import labels, memory, tasks, webhook
 from webapp.app_settings import get_autoprocess, save_autoprocess
 from webapp.auth import (
     DomainNotAllowed,
@@ -520,6 +520,7 @@ def _meeting_page(
             and memory.user_can_ask(meeting, user)
         ),
         "ask": ask,
+        "webhook_enabled": webhook.get_config(session).enabled,
     }
 
 
@@ -590,6 +591,27 @@ def meeting_memory_sync(
     job = memory.queue_ingest(
         session, meeting, transcript.id, priority=20, created_by=user.email
     )
+    return RedirectResponse(f"/meetings/{meeting_id}?job={job.id}", status_code=303)
+
+
+@app.post("/meetings/{meeting_id}/webhook")
+def meeting_webhook(
+    meeting_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Ręczna wysyłka najnowszego transkryptu — ten sam job co po pipeline'ie."""
+    meeting = session.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "No such meeting")
+    transcript = meeting.latest_transcript
+    if transcript is None:
+        raise HTTPException(400, "No transcript to deliver")
+    job = webhook.queue_delivery(
+        session, meeting, transcript.id, priority=20, created_by=user.email
+    )
+    if job is None:
+        raise HTTPException(400, "Webhook is not configured")
     return RedirectResponse(f"/meetings/{meeting_id}?job={job.id}", status_code=303)
 
 
@@ -971,6 +993,47 @@ def job_cancel(
         raise HTTPException(404, "No such job")
     cancel_job(session, job)
     return RedirectResponse("/jobs", status_code=303)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_view(
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    code = request.query_params.get("error", "")
+    return render(
+        request,
+        "settings.html",
+        {
+            "webhook": webhook.public_settings(webhook.get_config(session)),
+            "webhook_get_limit": webhook.GET_URL_LIMIT,
+            "saved": request.query_params.get("saved") == "1",
+            "error": webhook.CONFIG_ERRORS.get(code),
+        },
+    )
+
+
+@app.post("/settings/webhook")
+def save_webhook_setting(
+    url: str = Form(""),
+    method: str = Form(""),
+    bearer_token: str = Form(""),
+    clear_token: bool = Form(False),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    try:
+        webhook.save_config(
+            session,
+            url=url,
+            method=method,
+            token=bearer_token,
+            clear_token=bool(clear_token),
+        )
+    except webhook.WebhookConfigError as exc:
+        return RedirectResponse(f"/settings?error={exc.code}", status_code=303)
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @app.post("/api/settings/autoprocess")
