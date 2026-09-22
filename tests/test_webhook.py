@@ -284,6 +284,62 @@ def test_url_with_saved_or_short_token_is_rejected(client, session):
     assert webhook.get_config(session).token == short
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[bad",
+        "http://hooks.example:99999/hook",
+        "http://hooks.example:abc/hook",
+        "http://hooks.example:0/hook",
+        "https://hooks.example/hook?api_key=secret",
+        "https://hooks.example/hook?api-key=secret",
+        "https://hooks.example/hook?signature=abc",
+        "https://hooks.example/hook?sig=abc",
+        "https://hooks.example/hook?key=abc",
+    ],
+)
+def test_malformed_or_credential_urls_are_rejected(client, url):
+    rejected = _save(client, url=url, bearer_token="")
+    assert rejected.status_code == 303
+    assert rejected.headers["location"].endswith("error=invalid_url")
+
+
+def test_explicit_port_and_ipv6_are_accepted(client, session):
+    saved = _save(client, url="https://hooks.example:8443/hook", bearer_token="")
+    assert saved.status_code == 303
+    assert saved.headers["location"].endswith("saved=1")
+    session.expire_all()
+    assert webhook.get_config(session).url == "https://hooks.example:8443/hook"
+
+    ipv6 = _save(client, url="https://[::1]:8443/hook", bearer_token="")
+    assert ipv6.status_code == 303
+    assert ipv6.headers["location"].endswith("saved=1")
+
+
+def test_whitespace_token_is_rejected_and_plus_form_is_redacted(client, session):
+    rejected = _save(client, bearer_token="a b")
+    assert rejected.status_code == 303
+    assert rejected.headers["location"].endswith("error=invalid_token")
+    assert "a b" not in rejected.headers["location"]
+    assert "a+b" not in rejected.headers["location"]
+    page = client.get(rejected.headers["location"])
+    assert "a b" not in page.text
+    assert "a+b" not in page.text
+    assert "whitespace" in page.text
+    session.expire_all()
+    assert webhook.get_config(session).token == ""
+
+    session.add(AppSetting(key=webhook.TOKEN_KEY, value="a b"))
+    session.commit()
+    leaked = _save(client, url="https://hooks.example/hook?q=a+b", bearer_token="")
+    assert leaked.headers["location"].endswith("error=invalid_url")
+    assert "a+b" not in client.get("/settings").text
+    assert "a b" not in client.get("/settings").text
+    assert webhook.redact("failed a+b and a%20b", "a b") == (
+        "failed [redacted] and [redacted]"
+    )
+
+
 def test_control_characters_and_non_latin1_tokens_are_rejected(client, session):
     for bad in ("abc\ndef", "token\x00x", "zażółć-token"):
         rejected = _save(client, bearer_token=bad)

@@ -19,7 +19,16 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qsl,
+    quote,
+    quote_plus,
+    unquote,
+    unquote_plus,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+)
 
 import httpx
 from sqlalchemy.exc import IntegrityError
@@ -45,16 +54,32 @@ URL_KEY = "webhook_url"
 METHOD_KEY = "webhook_method"
 TOKEN_KEY = "webhook_bearer_token"
 
-_SECRET_QUERY_PARTS = ("token", "secret", "password", "bearer")
+_SECRET_QUERY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "bearer",
+    "api_key",
+    "apikey",
+    "signature",
+    "credential",
+    "access_key",
+    "private_key",
+)
+_SECRET_QUERY_EXACT = frozenset({"sig", "key", "auth", "pwd"})
 _RESERVED_QUERY = "payload"
 
 CONFIG_ERRORS = {
     "invalid_url": (
-        "Webhook URL must be http or https, with a host, and without a "
-        "username, password, secret query parameter, or the bearer token."
+        "Webhook URL must be a valid http or https URL with a host and a "
+        "usable port, and without a username, password, credential query "
+        "parameter, or the bearer token."
     ),
     "invalid_method": "Method must be POST or GET.",
-    "invalid_token": "Bearer token cannot contain line breaks or control characters.",
+    "invalid_token": (
+        "Bearer token cannot contain whitespace, line breaks, or control characters."
+    ),
 }
 
 
@@ -89,14 +114,17 @@ def public_settings(cfg: WebhookConfig) -> dict[str, Any]:
     }
 
 
+def _secret_forms(secret: str) -> tuple[str, ...]:
+    forms = {secret, quote(secret, safe=""), quote_plus(secret)}
+    return tuple(sorted((form for form in forms if form), key=len, reverse=True))
+
+
 def redact(text: str, secret: str) -> str:
     if not text or not secret:
         return text
     redacted = text.replace(f"Bearer {secret}", "Bearer [redacted]")
-    redacted = redacted.replace(secret, "[redacted]")
-    encoded = quote(secret, safe="")
-    if encoded and encoded != secret:
-        redacted = redacted.replace(encoded, "[redacted]")
+    for form in _secret_forms(secret):
+        redacted = redacted.replace(form, "[redacted]")
     return redacted
 
 
@@ -135,7 +163,7 @@ def _validate_method(method: str) -> str:
 
 def _secret_query_name(name: str) -> bool:
     key = name.lower().replace("-", "_")
-    if key == _RESERVED_QUERY:
+    if key == _RESERVED_QUERY or key in _SECRET_QUERY_EXACT:
         return True
     return any(part in key for part in _SECRET_QUERY_PARTS)
 
@@ -148,8 +176,14 @@ def _validate_url(url: str) -> str:
         c.isspace() or ord(c) < 32 for c in cleaned
     ):
         raise WebhookConfigError("invalid_url")
-    parts = urlsplit(cleaned)
+    try:
+        parts = urlsplit(cleaned)
+        port = parts.port
+    except ValueError:
+        raise WebhookConfigError("invalid_url") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise WebhookConfigError("invalid_url")
+    if port is not None and not 1 <= port <= 65535:
         raise WebhookConfigError("invalid_url")
     if parts.username or parts.password:
         raise WebhookConfigError("invalid_url")
@@ -163,7 +197,10 @@ def _validate_url(url: str) -> str:
 
 
 def _validate_token(token: str) -> str:
-    if any(ord(c) < 32 or ord(c) == 127 for c in token) or len(token) > TOKEN_LIMIT:
+    if (
+        any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in token)
+        or len(token) > TOKEN_LIMIT
+    ):
         raise WebhookConfigError("invalid_token")
     try:
         token.encode("latin-1")
@@ -175,10 +212,9 @@ def _validate_token(token: str) -> str:
 def _url_contains_secret(url: str, secret: str) -> bool:
     if not secret:
         return False
-    haystacks = (url, unquote(url))
-    needles = (secret, quote(secret, safe=""))
+    haystacks = (url, unquote(url), unquote_plus(url))
     return any(
-        needle and needle in haystack for haystack in haystacks for needle in needles
+        needle in haystack for haystack in haystacks for needle in _secret_forms(secret)
     )
 
 
