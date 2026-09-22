@@ -68,11 +68,6 @@ PoC transkrypcji spotkań z nagrań Recall.ai. Stan i decyzje:
   `webhook_deliver` wysyła info o spotkaniu i treść. Token nie wraca do UI
   ani do logów joba. Porażka dostawy nie cofa `transcript_state=ready`.
   Szczegóły w README → "Webhook transkryptu".
-- **Webhook transkryptu** — globalna konfiguracja w UI (`/settings`): URL,
-  metoda POST/GET, opcjonalny Bearer. Po gotowym transkrypcie job
-  `webhook_deliver` wysyła info o spotkaniu i treść. Token nie wraca do UI
-  ani do logów joba. Porażka dostawy nie cofa `transcript_state=ready`.
-  Szczegóły w README → "Webhook transkryptu".
 - Schemat bazy: `init_db()` robi `create_all` + `add_missing_columns()` —
   nowa **nullowalna** kolumna w modelu doda się sama na istniejącej bazie.
   Wszystko inne (NOT NULL, zmiana typu, usunięcie) wymaga ręcznej migracji.
