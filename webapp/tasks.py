@@ -416,6 +416,10 @@ def _webhook_transcript(ctx: JobContext, meeting: Meeting) -> Transcript:
 @task(webhook.KIND)
 def webhook_deliver(ctx: JobContext) -> dict[str, Any]:
     """Wyślij info o spotkaniu i gotowy transkrypt na globalny webhook."""
+    cfg = webhook.get_config(ctx.session)
+    if not cfg.enabled:
+        ctx.progress(100, "webhook disabled — skipped", "webhook disabled — skipped")
+        return {"skipped": True, "reason": "webhook disabled"}
     try:
         meeting = _meeting(ctx)
     except ValueError as exc:
@@ -426,7 +430,6 @@ def webhook_deliver(ctx: JobContext) -> dict[str, Any]:
     except FileNotFoundError:
         raise JobError("transcript file is missing", retryable=False) from None
     ctx.progress(30, "sending webhook")
-    cfg = webhook.get_config(ctx.session)
     result = webhook.deliver(
         meeting,
         transcript,

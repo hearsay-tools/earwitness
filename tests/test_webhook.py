@@ -521,6 +521,37 @@ def test_connection_error_does_not_log_the_transcript_or_token(
     assert meeting.transcript_state == "ready"
 
 
+def test_send_request_discards_the_body_without_reading_it():
+    class Body(httpx.SyncByteStream):
+        def __init__(self) -> None:
+            self.reads = 0
+            self.closed = False
+
+        def __iter__(self):
+            self.reads += 1
+            yield b"x" * 1024
+            raise AssertionError("response body should not be consumed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = Body()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204, stream=body)
+
+    response = webhook.send_request(
+        "POST",
+        "https://hooks.example/hook",
+        headers={},
+        content=b"{}",
+        transport=httpx.MockTransport(handler),
+    )
+    assert response.status_code == 204
+    assert body.reads == 0
+    assert body.closed
+
+
 def test_disabled_webhook_skips_without_a_request(session, tmp_path, monkeypatch):
     meeting, transcript = _meeting(session, tmp_path)
     called = False
@@ -553,6 +584,24 @@ def test_token_embedded_in_a_stored_url_is_redacted(session, tmp_path, monkeypat
     assert TOKEN not in job.result["url"]
     assert "[redacted]" in job.result["url"]
     assert TOKEN not in (job.log or "")
+
+
+def test_disabled_webhook_skips_when_the_transcript_file_is_missing(session, tmp_path):
+    meeting, transcript = _meeting(session, tmp_path)
+    tmp_path.joinpath("transcript.txt").unlink()
+    job = J.enqueue(
+        session,
+        webhook.KIND,
+        meeting_id=meeting.id,
+        args={"transcript_id": transcript.id},
+    )
+    J.run_job(session, J.claim(session, "w1", kinds=[webhook.KIND]))
+    session.refresh(job)
+    session.refresh(meeting)
+    assert job.status == "done"
+    assert job.result["skipped"] is True
+    assert "missing" not in (job.error or "")
+    assert meeting.transcript_state == "ready"
 
 
 def test_missing_transcript_file_fails_without_changing_state(session, tmp_path):

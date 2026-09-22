@@ -370,8 +370,10 @@ def send_request(
 
     Klient httpx na INFO zapisuje pełny URL. Przy GET jest w nim transkrypt,
     więc idziemy transportem. Timeout siedzi w extensions, tak jak ustawia go
-    klient. Ciało odpowiedzi jest odczytane i porzucane — nie logujemy go,
-    bo serwer mógł odbić nagłówek Authorization.
+    klient. Status jest w nagłówkach — ciała nie czytamy. Duża albo wolna
+    odpowiedź nie może zjeść pamięci ani zmienić przyjętej dostawy w retry.
+    Strumień zamykamy od razu, więc ewentualny echo Authorization nie zostaje
+    w logu.
     """
     request = httpx.Request(
         method,
@@ -384,7 +386,7 @@ def send_request(
     transport = transport or httpx.HTTPTransport()
     try:
         response = transport.handle_request(request)
-        response.read()
+        response.close()
         return response
     finally:
         if own:
