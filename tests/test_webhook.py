@@ -224,6 +224,9 @@ def test_invalid_settings_do_not_replace_a_saved_secret(client, session):
         "https://user:secret@hooks.example/hook",
         "https://hooks.example/hook?access_token=ew-bearer-9f3c1a7e",
         "https://hooks.example/hook?payload=1",
+        "https://hooks.example/hook?payload",
+        "https://hooks.example/hook?payload=",
+        "https://hooks.example/hook?foo=1&payload=",
         "https://hooks.example/ew-bearer-9f3c1a7e",
         "not a url",
         "http:///missing-host",
@@ -234,6 +237,51 @@ def test_unsafe_urls_are_rejected(client, url):
     assert rejected.headers["location"].endswith("error=invalid_url")
     assert TOKEN not in rejected.headers["location"]
     assert TOKEN not in client.get("/settings").text
+
+
+def test_url_with_saved_or_short_token_is_rejected(client, session):
+    _save(client)
+    rotated = _save(
+        client,
+        url=f"https://hooks.example/hook?old={TOKEN}",
+        bearer_token="replacement-token-xyz",
+    )
+    assert rotated.headers["location"].endswith("error=invalid_url")
+    assert TOKEN not in rotated.headers["location"]
+    session.expire_all()
+    cfg = webhook.get_config(session)
+    assert cfg.url == "https://hooks.example/earwitness"
+    assert cfg.token == TOKEN
+    page = client.get("/settings")
+    assert TOKEN not in page.text
+    assert "replacement-token-xyz" not in page.text
+
+    cleared = _save(
+        client,
+        url=f"https://hooks.example/{TOKEN}",
+        bearer_token="",
+        clear_token="true",
+    )
+    assert cleared.headers["location"].endswith("error=invalid_url")
+    session.expire_all()
+    assert webhook.get_config(session).token == TOKEN
+    assert TOKEN not in client.get("/settings").text
+
+    short = "q7k"
+    rejected = _save(
+        client,
+        url=f"https://hooks.example/hook?t={short}",
+        bearer_token=short,
+    )
+    assert rejected.headers["location"].endswith("error=invalid_url")
+    session.expire_all()
+    assert webhook.get_config(session).token == TOKEN
+    assert short not in client.get("/settings").text
+
+    kept = _save(client, bearer_token=short)
+    assert kept.status_code == 303
+    session.expire_all()
+    assert webhook.get_config(session).token == short
 
 
 def test_control_characters_and_non_latin1_tokens_are_rejected(client, session):
@@ -522,6 +570,34 @@ def test_process_queues_webhook_and_a_failed_pipeline_does_not(
     assert session.query(Job).filter(Job.kind == webhook.KIND).count() == 1
     session.refresh(meeting)
     assert meeting.transcript_state == "failed"
+
+
+def test_webhook_queue_db_error_does_not_fail_transcription(
+    session, tmp_path, monkeypatch
+):
+    meeting, transcript = _meeting(session, tmp_path)
+
+    def fake_pipeline(ctx, found, force_asr=False):
+        found.transcript_state = "ready"
+        ctx.session.commit()
+        return {"transcript_id": transcript.id}
+
+    def boom(db, *_args, **_kwargs):
+        from sqlalchemy import text
+
+        db.execute(text("SELECT * FROM missing_webhook_table"))
+
+    monkeypatch.setattr(tasks, "_do_pipeline", fake_pipeline)
+    monkeypatch.setattr(webhook, "queue_delivery", boom)
+    job = J.enqueue(session, "transcribe", meeting_id=meeting.id)
+    J.run_job(session, J.claim(session, "w1", kinds=["transcribe"]))
+    session.refresh(job)
+    session.refresh(meeting)
+    assert job.status == "done"
+    assert job.result["webhook_job"] is None
+    assert meeting.transcript_state == "ready"
+    assert "webhook not queued" in (job.log or "")
+    assert TOKEN not in (job.log or "")
 
 
 def test_webhook_queue_error_does_not_fail_transcription(

@@ -153,7 +153,10 @@ def _validate_url(url: str) -> str:
         raise WebhookConfigError("invalid_url")
     if parts.username or parts.password:
         raise WebhookConfigError("invalid_url")
-    if any(_secret_query_name(name) for name, _ in parse_qsl(parts.query)):
+    if any(
+        _secret_query_name(name)
+        for name, _ in parse_qsl(parts.query, keep_blank_values=True)
+    ):
         raise WebhookConfigError("invalid_url")
     path = parts.path or "/"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
@@ -170,7 +173,7 @@ def _validate_token(token: str) -> str:
 
 
 def _url_contains_secret(url: str, secret: str) -> bool:
-    if len(secret) < 8:
+    if not secret:
         return False
     haystacks = (url, unquote(url))
     needles = (secret, quote(secret, safe=""))
@@ -190,8 +193,8 @@ def save_config(
     """Zapisz URL, metodę i token. Pusty URL wyłącza wysyłkę.
 
     Pusty token zostawia zapisany, chyba że `clear_token`. Nowy token
-    wygrywa z kasowaniem. Token wklejony w URL jest odrzucany, bo URL
-    wraca do formularza.
+    wygrywa z kasowaniem. Token wklejony w URL — nowy albo już zapisany,
+    dowolnej długości — jest odrzucany, bo URL wraca do formularza.
     """
     clean_url = _validate_url(url)
     clean_method = _validate_method(method)
@@ -203,7 +206,9 @@ def save_config(
         stored = ""
     else:
         stored = current.token
-    if _url_contains_secret(clean_url, stored):
+    if any(
+        _url_contains_secret(clean_url, secret) for secret in (stored, current.token)
+    ):
         raise WebhookConfigError("invalid_url")
 
     def apply() -> None:

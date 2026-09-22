@@ -317,6 +317,7 @@ def _queue_webhook(
             created_by="automatic",
         )
     except Exception as exc:  # noqa: BLE001 — dostawa nie może zepsuć transkrypcji
+        ctx.session.rollback()
         ctx.log(f"webhook not queued: {type(exc).__name__}")
         return None
     if job is None:
