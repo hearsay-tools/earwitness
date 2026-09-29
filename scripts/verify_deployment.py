@@ -1,12 +1,17 @@
 """Wait for Komodo's health receipt without inbound access to the homelab."""
 
 import json
+import os
 import subprocess
 import sys
 import time
 
 
 def read_receipt(checkout: str) -> dict:
+    branch = os.environ.get("DEPLOY_RECEIPT_BRANCH", "deployment-status/earwitness")
+    subprocess.run(
+        ["git", "check-ref-format", "--branch", branch], check=True, capture_output=True
+    )
     subprocess.run(
         [
             "git",
@@ -15,7 +20,7 @@ def read_receipt(checkout: str) -> dict:
             "fetch",
             "--quiet",
             "origin",
-            "+refs/heads/deployment-status/earwitness:refs/remotes/origin/deployment-status/earwitness",
+            f"+refs/heads/{branch}:refs/deployment-receipt",
         ],
         check=True,
         capture_output=True,
@@ -27,7 +32,7 @@ def read_receipt(checkout: str) -> dict:
             "-C",
             checkout,
             "show",
-            "refs/remotes/origin/deployment-status/earwitness:status.json",
+            "refs/deployment-receipt:status.json",
         ],
         check=True,
         capture_output=True,
@@ -39,7 +44,8 @@ def read_receipt(checkout: str) -> dict:
 
 def main() -> None:
     checkout, revision, digest = sys.argv[1:]
-    expected_image = f"ghcr.io/hearsay-tools/earwitness@{digest}"
+    image = os.environ.get("IMAGE_REPOSITORY", "ghcr.io/hearsay-tools/earwitness")
+    expected_image = f"{image}@{digest}"
     deadline = time.monotonic() + 600
     last_observation = "No deployment receipt"
     while time.monotonic() < deadline:

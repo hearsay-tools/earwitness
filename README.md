@@ -27,29 +27,49 @@ cp .env.example .env
 
 ## Webapp
 
-### Automatyczne wdrożenia homelab
+### Optional deployment
 
-Push do `main` uruchamia workflow `docker`: współdzielone CI (lint i testy),
-budowę, publikację GHCR, test opublikowanego obrazu po digescie oraz commit obu digestów (`web`
-i `worker`) w `example/deployment-config:main`. Komodo wdraża zmianę przez istniejący
-webhook homelab. Tagi `v*` publikują obrazy, ale nie wdrażają produkcji.
+CI tests and builds the app without any deployment configuration. Deployment
+is **disabled by default**, including in forks. Image publication uses
+`ghcr.io/<repository-owner>/<repository-name>`; PRs never publish or deploy.
+Only a successful default-branch release can deploy, and only when the
+repository variable `DEPLOY_ENABLED` is exactly `true`.
 
-Job `deploy` czeka do 10 minut na potwierdzenie z gałęzi
-`deployment-status/earwitness` w homelab. Hook Komodo sprawdza digest i
-etykietę źródłowego commita obu kontenerów, zdrowie web/DB oraz uruchomienie
-workera. Nie uruchamia płatnej transkrypcji. Aplikacja pozostaje w sieci
-prywatnej; CI odczytuje potwierdzenie z GitHub.
+Configure these under GitHub **Settings → Secrets and variables → Actions**:
 
-Sekret Actions `HOMELAB_DEPLOY_KEY` to dedykowany klucz z prawem zapisu do
-repozytorium homelab (`earwitness-deploy`). PR-y wykonują testy i smoke testy
-bez publikacji obrazu i klucza wdrożeniowego. Wdrożenia są szeregowane,
-a run starszego commita pomija promocję. Stary webhook zdarzeń `package`
-jest wyłączony.
+| Setting | Kind | Value / default |
+|---|---|---|
+| `DEPLOY_ENABLED` | Variable | `true` to opt in; otherwise skipped |
+| `DEPLOY_REPOSITORY` | Secret | Target GitOps repository, `owner/repository` |
+| `DEPLOY_KEY` | Secret | SSH deploy key with write access to that repository |
+| `DEPLOY_BRANCH` | Variable | Target branch; default `main` |
+| `DEPLOY_COMPOSE_PATH` | Variable | Relative path; default `stacks/earwitness/compose.yaml` |
+| `DEPLOY_RECEIPT_BRANCH` | Variable | Health receipt branch; default `deployment-status/earwitness` |
 
-Rollback: cofnij commit `deploy: earwitness ...` w homelab i wypchnij zmianę;
-zachowaj poprzednie obrazy GHCR i sprawdź zgodność schematu bazy. Cofnięcie
-obrazu nie cofa migracji danych. Po awarii przejściowej ponów nieudany job;
-jeśli Komodo pominął webhook, ponów jego dostarczenie w homelab.
+Existing installations can keep `HOMELAB_DEPLOY_KEY` instead of `DEPLOY_KEY`.
+`DEPLOY_REPOSITORY` is a secret so its value is masked in Actions logs; the
+workflow and variable names remain public. Deploy keys grant write access
+to the entire target repository. No deployment secrets are needed for CI.
+Set `DEPLOY_ENABLED=false` to disable deployment without disabling tests or
+image publication. Enabling deployment with missing secrets fails clearly.
+
+The target Compose file must contain the app's service names and an image
+from this source repository: `web` and `worker`.
+The updater changes only their digest pins and source comments; runtime
+settings are preserved. The GitOps controller must deploy changes on the
+configured branch, then write `status.json` to the configured receipt branch:
+
+```json
+{"status":"healthy","revision":"<full source commit>","image":"ghcr.io/owner/earwitness@sha256:<digest>","verified_at":"<UTC timestamp>"}
+```
+
+CI waits up to ten minutes for the exact image digest and revision. The
+controller should verify the running containers before publishing a receipt.
+The receipt branch must not trigger another deployment. Releases are
+serialized, outdated source commits skip promotion, and concurrent target
+commits are retried without force-pushing. Rollback by reverting the image
+update in the target repository; retain old images and check database
+compatibility where applicable.
 
 ### Uruchomienie lokalne
 
