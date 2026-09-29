@@ -12,7 +12,7 @@
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
-RUN pip install --no-cache-dir uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.20 /uv /bin/uv
 
 # Najpierw lockfile — cache warstwy przy zmianach samego kodu.
 COPY pyproject.toml uv.lock ./
