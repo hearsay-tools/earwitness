@@ -39,24 +39,6 @@ jobs:
           tags: earwitness:smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Smoke-test web and worker without external services
-        run: |
-          set -euo pipefail
-          docker run -d --name earwitness-smoke -p 127.0.0.1:8000:8000 \
-            -e SERVICE=web -e AUTOSYNC_INTERVAL=0 earwitness:smoke
-          trap 'docker logs earwitness-smoke; docker rm -f earwitness-smoke' EXIT
-          ready=false
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/healthz | jq -e '.ok == true'; then
-              ready=true
-              break
-            fi
-            sleep 2
-          done
-          test "$ready" = true
-          # Exercise worker startup and database initialization on an empty DB.
-          docker run --rm --entrypoint python -e AUTOSYNC_INTERVAL=0 \
-            earwitness:smoke -m webapp.worker --once
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: github.event_name != 'pull_request'
         with:
@@ -84,6 +66,27 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke-test web and worker without external services
+        env:
+          SMOKE_IMAGE: ${{ steps.publish.outputs.digest && format('ghcr.io/hearsay-tools/earwitness@{0}', steps.publish.outputs.digest) || 'earwitness:smoke' }}
+        run: |
+          set -euo pipefail
+          docker run -d --name earwitness-smoke -p 127.0.0.1:8000:8000 \
+            -e SERVICE=web -e AUTOSYNC_INTERVAL=0 "$SMOKE_IMAGE"
+          trap 'docker logs earwitness-smoke; docker rm -f earwitness-smoke' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz | jq -e '.ok == true'; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = true
+          # Exercise worker startup and database initialization on an empty DB.
+          docker run --rm --entrypoint python -e AUTOSYNC_INTERVAL=0 \
+            "$SMOKE_IMAGE" -m webapp.worker --once
 
   deploy:
     needs: image

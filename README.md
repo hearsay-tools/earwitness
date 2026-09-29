@@ -30,7 +30,7 @@ cp .env.example .env
 ### Automatyczne wdrożenia homelab
 
 Push do `main` uruchamia workflow `docker`: współdzielone CI (lint i testy),
-budowę i test kontenera, publikację GHCR oraz commit obu digestów (`web`
+budowę, publikację GHCR, test opublikowanego obrazu po digescie oraz commit obu digestów (`web`
 i `worker`) w `wjarka/homelab:main`. Komodo wdraża zmianę przez istniejący
 webhook homelab. Tagi `v*` publikują obrazy, ale nie wdrażają produkcji.
 
