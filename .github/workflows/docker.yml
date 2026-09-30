@@ -27,7 +27,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      statuses: write
     outputs:
       digest: ${{ steps.publish.outputs.digest }}
       image: ${{ steps.image-name.outputs.image }}
@@ -93,11 +92,18 @@ jobs:
           docker run --rm --entrypoint python -e AUTOSYNC_INTERVAL=0 \
             "$SMOKE_IMAGE" -m webapp.worker --once
 
+  image-status:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    steps:
       - name: Record the tested image digest
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         env:
           GH_TOKEN: ${{ github.token }}
-          DIGEST: ${{ steps.publish.outputs.digest }}
+          DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
