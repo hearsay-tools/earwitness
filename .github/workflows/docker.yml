@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
 
-# Never interrupt a promotion or let an older run overwrite a newer release.
+# Serialize publication for each ref.
 concurrency:
   group: earwitness-${{ github.ref }}
   cancel-in-progress: false
@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      statuses: write
     outputs:
       digest: ${{ steps.publish.outputs.digest }}
       image: ${{ steps.image-name.outputs.image }}
@@ -92,79 +93,15 @@ jobs:
           docker run --rm --entrypoint python -e AUTOSYNC_INTERVAL=0 \
             "$SMOKE_IMAGE" -m webapp.worker --once
 
-  deploy:
-    needs: image
-    if: vars.DEPLOY_ENABLED == 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH || 'main' }}
-      DEPLOY_COMPOSE_PATH: ${{ vars.DEPLOY_COMPOSE_PATH || 'stacks/earwitness/compose.yaml' }}
-      DEPLOY_RECEIPT_BRANCH: ${{ vars.DEPLOY_RECEIPT_BRANCH || 'deployment-status/earwitness' }}
-      IMAGE_REPOSITORY: ${{ needs.image.outputs.image }}
-      SOURCE_REPOSITORY: ${{ github.repository }}
-      SOURCE_BRANCH: ${{ github.event.repository.default_branch }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
-        with:
-          version: "0.12.20"
-          python-version: "3.12"
-      - name: Check deployment credentials
-        env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY || secrets.HOMELAB_DEPLOY_KEY }}
-          DEPLOY_REPOSITORY: ${{ secrets.DEPLOY_REPOSITORY }}
-        run: |
-          test -n "$DEPLOY_KEY" || { echo 'Set DEPLOY_KEY (or legacy HOMELAB_DEPLOY_KEY)'; exit 1; }
-          test -n "$DEPLOY_REPOSITORY" || { echo 'Set DEPLOY_REPOSITORY'; exit 1; }
-          git check-ref-format --branch "$DEPLOY_BRANCH"
-          git check-ref-format --branch "$DEPLOY_RECEIPT_BRANCH"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ secrets.DEPLOY_REPOSITORY }}
-          ref: ${{ env.DEPLOY_BRANCH }}
-          path: homelab
-          ssh-key: ${{ secrets.DEPLOY_KEY || secrets.HOMELAB_DEPLOY_KEY }}
-      - name: Commit the image digest to homelab
-        id: promote
+      - name: Record the tested image digest
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         env:
           GH_TOKEN: ${{ github.token }}
-          REVISION: ${{ github.sha }}
-          DIGEST: ${{ needs.image.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -euo pipefail
-          git -C homelab config user.name 'earwitness deploy'
-          git -C homelab config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          for attempt in $(seq 1 5); do
-            head=$(gh api "repos/$SOURCE_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq '.object.sha')
-            if [ "$head" != "$REVISION" ]; then
-              echo 'Superseded by a newer main commit; skipping promotion.'
-              echo 'deployed=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git -C homelab fetch origin "$DEPLOY_BRANCH"
-            git -C homelab reset --hard "origin/$DEPLOY_BRANCH"
-            uv run --no-project python scripts/update_homelab.py homelab "$DIGEST" "$REVISION"
-            git -C homelab add -- "$DEPLOY_COMPOSE_PATH"
-            if git -C homelab diff --cached --quiet; then
-              echo 'Desired image is already recorded; verifying the running revision.'
-              echo 'deployed=true' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git -C homelab commit -m "deploy: earwitness ${REVISION:0:12}"
-            if git -C homelab push origin "HEAD:$DEPLOY_BRANCH"; then
-              echo 'deployed=true' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo 'Could not update homelab after five attempts' >&2
-          exit 1
-      - name: Verify the deployed revision is healthy
-        if: steps.promote.outputs.deployed == 'true'
-        env:
-          REVISION: ${{ github.sha }}
-          DIGEST: ${{ needs.image.outputs.digest }}
-        run: uv run --no-project python scripts/verify_deployment.py homelab "$REVISION" "$DIGEST"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context=container-image \
+            -f description="$DIGEST" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"

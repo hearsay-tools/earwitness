@@ -27,49 +27,23 @@ cp .env.example .env
 
 ## Webapp
 
-### Optional deployment
+### Image publication and optional deployment
 
-CI tests and builds the app without any deployment configuration. Deployment
-is **disabled by default**, including in forks. Image publication uses
-`ghcr.io/<repository-owner>/<repository-name>`; PRs never publish or deploy.
-Only a successful default-branch release can deploy, and only when the
-repository variable `DEPLOY_ENABLED` is exactly `true`.
+CI tests the app, publishes `ghcr.io/<repository-owner>/<repository-name>`,
+and smoke-tests the published digest. Pull requests only test and build.
+A successful default-branch image job records the digest in the public
+`container-image` commit status, linked to the exact workflow run attempt.
 
-Configure these under GitHub **Settings → Secrets and variables → Actions**:
+Deployment is external and optional. To automate your installation, configure
+an authenticated GitHub `workflow_run` webhook in repository settings. Your
+receiver should accept only successful completed runs of the publication
+workflow on the default branch, verify the source commit is still current,
+and match the `container-image` status to that run and attempt before using
+its immutable digest. CI success means the image passed its checks; your
+infrastructure must track deployment health separately.
 
-| Setting | Kind | Value / default |
-|---|---|---|
-| `DEPLOY_ENABLED` | Variable | `true` to opt in; otherwise skipped |
-| `DEPLOY_REPOSITORY` | Secret | Target GitOps repository, `owner/repository` |
-| `DEPLOY_KEY` | Secret | SSH deploy key with write access to that repository |
-| `DEPLOY_BRANCH` | Variable | Target branch; default `main` |
-| `DEPLOY_COMPOSE_PATH` | Variable | Relative path; default `stacks/earwitness/compose.yaml` |
-| `DEPLOY_RECEIPT_BRANCH` | Variable | Health receipt branch; default `deployment-status/earwitness` |
-
-Existing installations can keep `HOMELAB_DEPLOY_KEY` instead of `DEPLOY_KEY`.
-`DEPLOY_REPOSITORY` is a secret so its value is masked in Actions logs; the
-workflow and variable names remain public. Deploy keys grant write access
-to the entire target repository. No deployment secrets are needed for CI.
-Set `DEPLOY_ENABLED=false` to disable deployment without disabling tests or
-image publication. Enabling deployment with missing secrets fails clearly.
-
-The target Compose file must contain the app's service names and an image
-from this source repository: `web` and `worker`.
-The updater changes only their digest pins and source comments; runtime
-settings are preserved. The GitOps controller must deploy changes on the
-configured branch, then write `status.json` to the configured receipt branch:
-
-```json
-{"status":"healthy","revision":"<full source commit>","image":"ghcr.io/owner/earwitness@sha256:<digest>","verified_at":"<UTC timestamp>"}
-```
-
-CI waits up to ten minutes for the exact image digest and revision. The
-controller should verify the running containers before publishing a receipt.
-The receipt branch must not trigger another deployment. Releases are
-serialized, outdated source commits skip promotion, and concurrent target
-commits are retried without force-pushing. Rollback by reverting the image
-update in the target repository; retain old images and check database
-compatibility where applicable.
+This repository needs no infrastructure credentials, target repository name,
+or deployment URL in Actions. Forks do not inherit repository webhooks.
 
 ### Uruchomienie lokalne
 
