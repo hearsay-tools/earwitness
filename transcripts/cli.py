@@ -38,6 +38,8 @@ from .replicate_client import (
     DEFAULT_DIARIZER,
     DEFAULT_MODEL,
     DIARIZER_BACKENDS,
+    LOCAL_DIARIZER,
+    LOCAL_DIARIZER_DESCRIPTION,
     diarize_cloud,
     save_as_timeline,
     transcribe_and_diarize,
@@ -405,13 +407,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pipe.add_argument(
         "--diarizer",
-        choices=list(DIARIZER_BACKENDS.keys()),
+        choices=[*DIARIZER_BACKENDS.keys(), LOCAL_DIARIZER],
         default=None,
         help=(
-            "Backend diaryzacji (Replicate). "
+            "Backend diaryzacji. "
             + " | ".join(
                 f"'{k}': {v['description']}" for k, v in DIARIZER_BACKENDS.items()
             )
+            + f" | '{LOCAL_DIARIZER}': {LOCAL_DIARIZER_DESCRIPTION}"
             + f" (domyślnie {DEFAULT_DIARIZER}). "
             "UWAGA: jeśli obok audio jest speaker-timeline.json z Recall, "
             "pipeline użyje go zamiast Replicate — chyba że jawnie podasz "
@@ -944,8 +947,12 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
     if not api_key:
         print("ERROR: ustaw ELEVENLABS_API_KEY (np. w .env)", file=sys.stderr)
         return 2
-    if not os.environ.get("REPLICATE_API_TOKEN"):
-        print("ERROR: ustaw REPLICATE_API_TOKEN (np. w .env)", file=sys.stderr)
+    if args.diarizer != LOCAL_DIARIZER and not os.environ.get("REPLICATE_API_TOKEN"):
+        print(
+            "ERROR: ustaw REPLICATE_API_TOKEN (np. w .env) albo użyj "
+            f"--diarizer {LOCAL_DIARIZER}",
+            file=sys.stderr,
+        )
         return 2
     if not args.audio.exists():
         print(f"ERROR: plik {args.audio} nie istnieje", file=sys.stderr)
@@ -1020,6 +1027,18 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
         )
     elif timeline_path.exists() and not args.force:
         print(f"[2/3] Reuse diarization timeline: {timeline_path}", file=sys.stderr)
+    elif args.diarizer == LOCAL_DIARIZER:
+        from .local_diarization import diarize_local
+
+        print(
+            f"[2/3] Diarization lokalnie (sherpa-onnx"
+            f"{f', n={args.num_speakers}' if args.num_speakers else ''})"
+            f" → {timeline_path}",
+            file=sys.stderr,
+        )
+        segments = diarize_local(audio_path, num_speakers=args.num_speakers)
+        save_as_timeline(segments, timeline_path)
+        print(f"      {len(segments)} segments", file=sys.stderr)
     else:
         diarizer = args.diarizer or DEFAULT_DIARIZER
         backend = DIARIZER_BACKENDS[diarizer]

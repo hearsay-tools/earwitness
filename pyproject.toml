@@ -19,6 +19,13 @@ dependencies = [
     "uvicorn[standard]>=0.52.1",
 ]
 
+[project.optional-dependencies]
+local = [
+    "numpy>=2.5.4",
+    "sherpa-onnx>=1.13.8",
+    "sherpa-onnx-core>=1.13.8",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

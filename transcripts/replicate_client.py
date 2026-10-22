@@ -44,6 +44,13 @@ DIARIZER_BACKENDS: dict[str, dict] = {
     },
 }
 DEFAULT_DIARIZER = "nemo"
+# Backend lokalny (bez Replicate) — obsługiwany osobno w CLI, nie przez
+# `diarize_cloud`, więc nie siedzi w DIARIZER_BACKENDS.
+LOCAL_DIARIZER = "local"
+LOCAL_DIARIZER_DESCRIPTION = (
+    "lokalnie na CPU (sherpa-onnx: pyannote segmentation + embeddingi), "
+    "bez Replicate i kluczy; wymaga `uv sync --extra local`."
+)
 
 
 @dataclass

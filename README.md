@@ -395,6 +395,13 @@ drugiego źródła akustycznego (net harmful — parafrazy, inwersje znaczeń).
 
 **Ograniczenia**: wymaga assetów Recall (`audio_separate` raw + recording.json).
 Dla innych nagrań fallback: `pipeline` (Replicate pyannote, poniżej). Backchannel
+
+**Diaryzacja lokalna (bez Replicate)**: `pipeline <plik> -o out.txt --diarizer local [--num-speakers N]`.
+sherpa-onnx (pyannote segmentation 3.0 + embeddingi mówcy + klasteryzacja) na CPU;
+modele (~35 MB) pobierają się do `~/.cache/earwitness/models` przy pierwszym użyciu.
+Instalacja: `uv sync --extra local`. Wymaga tylko `ELEVENLABS_API_KEY` i `ffmpeg`
+(wideo działa wprost). Zmierzone: 14,6 min nagrania w ~29 s na M-series. Podaj
+`--num-speakers`, gdy znasz liczbę mówców, bo bez niego klasteryzacja idzie po progu.
 wchłonięty w monolog dominującego mówcy pojawia się dwa razy: raz inline w jego
 wypowiedzi (artefakt mixed ASR) i raz jako odzyskana osobna linia — kosmetyczne.
 
