@@ -13,7 +13,7 @@ def transcribe(
     num_speakers: Optional[int] = None,
     diarization_threshold: Optional[float] = None,
     diarize: bool = True,
-    model_id: str = "scribe_v2",
+    model_id: str = "scribe_v3",
     language_code: Optional[str] = None,
 ) -> SpeechToTextConvertResponse:
     if num_speakers is not None and diarization_threshold is not None:

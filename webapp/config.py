@@ -72,7 +72,7 @@ class Settings:
 
     # --- pipeline ---
     elevenlabs_api_key: str = os.environ.get("ELEVENLABS_API_KEY", "")
-    asr_model: str = os.environ.get("ASR_MODEL", "scribe_v2")
+    asr_model: str = os.environ.get("ASR_MODEL", "scribe_v3")
 
     # --- storage ---
     recall_dir: Path = _path("RECALL_DIR", "output/recall")

@@ -1,6 +1,6 @@
 # Earwitness
 
-Earwitness — PoC transkrypcji spotkań. Default: ElevenLabs Scribe (`scribe_v2`) na zmiksowanym
+Earwitness — PoC transkrypcji spotkań. Default: ElevenLabs Scribe (`scribe_v3`) na zmiksowanym
 audio + **diaryzacja energią izolowanych kanałów** z Recall `audio_separate`
 (deterministyczna, bez ML) — subkomenda `pipeline-recall`.
 
@@ -331,7 +331,7 @@ uv run python main.py transcribe audio/spotkanie.mp3 -n 3
   zakres do 0.4 (sprawdzone empirycznie — bot ElevenLabs sugerował 0.7–0.8,
   to halucynacja).
 
-Pozostałe: `--model` (domyślnie `scribe_v2`), `--language` (np. `pl`; domyślnie
+Pozostałe: `--model` (domyślnie `scribe_v3`), `--language` (np. `pl`; domyślnie
 auto), `-o/--output`.
 
 ### `compare`
@@ -371,6 +371,14 @@ oraz po jednej linii na wypowiedź: `<Imię> [HH:mm:ss-HH:mm:ss] (Xs)`. Brak
 treści — bot eksportu nie zapisuje słów, tylko speaker timeline.
 
 ## Decyzje stackowe
+
+### 2026-11-13: Scribe v3 jako domyślny model ASR
+
+CLI i webappka domyślnie używają `scribe_v3`, także dla mini-ASR tiebreaków
+i odzysku overlapów. CLI pozwala nadpisać model przez `--model`, a webappka
+i worker przez `ASR_MODEL`. Istniejące pliki raw ASR nadal są reużywane;
+zmiana modelu dotyczy nowych wywołań API. Wyniki walidacji poniżej dotyczą
+używanego wówczas Scribe v2.
 
 ### 2026-07-10: ElevenLabs mixed + diaryzacja energią kanałów (CURRENT DEFAULT)
 

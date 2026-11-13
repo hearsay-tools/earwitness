@@ -96,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "Wszystkie słowa bez speaker_id.",
     )
     t.add_argument(
-        "--model", default="scribe_v2", help="Model ID (domyślnie scribe_v2)"
+        "--model", default="scribe_v3", help="Model ID (domyślnie scribe_v3)"
     )
     t.add_argument(
         "--language",
@@ -328,8 +328,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pr.add_argument(
         "--model",
-        default="scribe_v2",
-        help="ElevenLabs model (domyślnie scribe_v2)",
+        default="scribe_v3",
+        help="ElevenLabs model (domyślnie scribe_v3)",
     )
     pr.add_argument(
         "--language",
@@ -400,8 +400,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pipe.add_argument(
         "--model",
-        default="scribe_v2",
-        help="ElevenLabs model (domyślnie scribe_v2)",
+        default="scribe_v3",
+        help="ElevenLabs model (domyślnie scribe_v3)",
     )
     pipe.add_argument(
         "--diarizer",

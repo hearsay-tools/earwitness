@@ -532,7 +532,7 @@ def diarize_by_energy(
     words: list[dict],
     api_key: Optional[str] = None,
     language: Optional[str] = None,
-    model_id: str = "scribe_v2",
+    model_id: str = "scribe_v3",
     tiebreak: bool = True,
     recover_overlap: bool = True,
 ) -> tuple[list[Utterance], dict]:
